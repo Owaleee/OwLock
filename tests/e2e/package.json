@@ -1,0 +1,12 @@
+{
+  "name": "owlock-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Teste de fumaça da interface do OwLock (Chrome headless)",
+  "scripts": {
+    "smoke": "node smoke.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^23.0.0"
+  }
+}
