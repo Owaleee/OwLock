@@ -1,0 +1,135 @@
+# Cofre
+
+Gerenciador de senhas local, offline e de código aberto, escrito em Python.
+
+O Cofre guarda suas contas em um único arquivo criptografado, protegido por uma senha mestra. Nenhum dado sai do seu computador e o aplicativo não usa a rede.
+
+## Funcionalidades
+
+- Cofre cifrado com senha mestra.
+- Para cada conta: serviço, login ou e-mail, senha, se possui 2FA e qual aplicativo autenticador é usado, além de notas.
+- Busca que não diferencia maiúsculas, minúsculas nem acentos, em serviço, login, aplicativo de 2FA e notas.
+- Gerador de senhas fortes.
+- Copiar senha para a área de transferência, com limpeza automática após 30 segundos.
+- Bloqueio automático após 5 minutos sem uso.
+- Backup automático (`.bak`) da versão anterior do arquivo e gravação atômica, que evita corromper o cofre se o programa for interrompido durante um salvamento.
+
+## Como instalar e executar
+
+### Windows
+
+1. Instale o Python 3.10 ou superior pelo site [python.org](https://www.python.org/downloads/). No instalador, marque a opção **Add to PATH** e mantenha o componente **tcl/tk** selecionado, pois a interface gráfica depende dele.
+2. Abra o terminal (PowerShell ou Prompt de Comando) e execute:
+
+```bash
+git clone <url-do-repositório>
+cd cofre
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e .
+cofre
+```
+
+### Linux e macOS
+
+Requer Python 3.10 ou superior.
+
+```bash
+git clone <url-do-repositório>
+cd cofre
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+cofre
+```
+
+Também é possível executar com `python -m cofre`.
+
+### Escolhendo o arquivo do cofre
+
+Por padrão, o cofre fica na pasta `.cofre` dentro da pasta do seu usuário, no arquivo `cofre.vault`. Para usar outro arquivo, informe o caminho com a opção `--vault`:
+
+```bash
+cofre --vault CAMINHO/do/meu-cofre.vault
+```
+
+## Segurança
+
+O Cofre foi projetado para que o conteúdo do arquivo do cofre só possa ser lido com a senha mestra.
+
+- **Derivação da chave:** a senha mestra é transformada em uma chave de 256 bits pelo algoritmo Argon2id, configurado com 3 iterações, 64 MiB de memória e paralelismo 4. Cada cofre usa um salt aleatório de 16 bytes. Esse processo torna ataques de força bruta muito mais caros.
+- **Cifragem:** o conteúdo inteiro do cofre é cifrado com AES-256-GCM. Um nonce novo é gerado a cada gravação.
+- **Integridade:** o cabeçalho do arquivo (parâmetros de derivação e algoritmos) é usado como dado autenticado. Se alguém alterar esses parâmetros no arquivo, a abertura falha.
+- **Sem rede:** o Cofre não envia nem recebe dados. Tudo acontece localmente.
+- **Cofre em bloco único:** como o arquivo é cifrado inteiro, ele não revela quantas contas existem nem os nomes dos serviços.
+
+### Limitações
+
+Este é um projeto pessoal e precisa ser usado com consciência dessas limitações:
+
+- **A senha mestra não pode ser recuperada.** Se você a esquecer, os dados do cofre são perdidos.
+- **Computador comprometido:** se o sistema estiver infectado por keylogger ou malware, nenhum gerenciador local oferece proteção suficiente.
+- **Dados na memória:** enquanto o cofre estiver desbloqueado, os dados ficam na memória do processo.
+- **Arquivo `.bak`:** é a versão anterior do cofre, também cifrada. Depois de trocar a senha mestra, o `.bak` continua abrindo com a senha antiga até o próximo salvamento.
+- **Sem auditoria independente:** o código não passou por auditoria de segurança externa. Para uso crítico, considere também soluções auditadas, como [Bitwarden](https://bitwarden.com/) ou [KeePassXC](https://keepassxc.org/).
+
+### Recomendação
+
+Faça cópias do arquivo `.vault` em outro local, como um pendrive ou um serviço de nuvem. Ele está cifrado, então pode ser guardado com segurança fora do computador.
+
+## Formato do arquivo
+
+O cofre é salvo em JSON, com número de versão. A estrutura é esta:
+
+```json
+{
+  "format": "cofre-vault",
+  "version": 1,
+  "kdf": {"name": "argon2id", "salt": "<b64>", "time_cost": 3, "memory_cost": 65536, "parallelism": 4},
+  "cipher": {"name": "aes-256-gcm", "nonce": "<b64 12 bytes>"},
+  "ciphertext": "<b64>"
+}
+```
+
+O formato é versionado de propósito, para permitir que um aplicativo de celular leia o mesmo arquivo no futuro.
+
+## Arquitetura
+
+```
+cofre/
+  core/            # sem dependência de interface; reaproveitável numa API futura
+    models.py      # Entry (dataclass)
+    crypto.py      # derivação de chave (Argon2id) + AES-256-GCM
+    vault.py       # Vault: criar, abrir, CRUD, salvar (escrita atômica), trocar senha mestra
+    generator.py   # gerador de senhas com `secrets`
+    errors.py      # WrongPasswordError, VaultCorruptedError, VaultExistsError
+  gui/
+    app.py         # CustomTkinter: telas de desbloqueio, lista, formulário
+  __main__.py      # `python -m cofre`
+tests/             # pytest do núcleo
+```
+
+O núcleo (`cofre/core`) não depende da interface gráfica. Isso permite reaproveitar a lógica de cofre em outras interfaces, como uma API ou um aplicativo móvel.
+
+## Testes
+
+Para instalar as dependências de desenvolvimento e executar os testes do núcleo:
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+## Roteiro
+
+Próximos passos previstos:
+
+- Aplicativo de celular que lê o mesmo arquivo de cofre.
+- Sincronização entre dispositivos.
+- Geração de códigos TOTP.
+- Importação e exportação em CSV.
+- Executável para Windows, gerado com PyInstaller.
+
+## Licença
+
+Este projeto está licenciado sob a [Licença MIT](LICENSE).

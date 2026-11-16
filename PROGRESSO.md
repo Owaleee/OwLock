@@ -89,6 +89,11 @@ MIN_MASTER_PASSWORD_LENGTH = 8                                  (em vault.py; cr
 - Interface Python 3.12 com Tk (o ambiente de desenvolvimento só tem Tk no 3.12).
 
 ## Status
-- [ ] Fatia 1: núcleo + testes
-- [ ] Fatia 2: interface
-- [ ] Fatia 3: README
+- [x] Fatia 1: núcleo + testes (35 testes; rollback em memória quando a gravação falha)
+- [x] Fatia 2: interface (desbloqueio, lista, busca, formulário, cópia com limpeza em 30 s, bloqueio em 5 min)
+- [x] Fatia 3: README + LICENSE
+
+## Pendências conhecidas
+- Trocar senha mestra existe no núcleo (`Vault.change_master_password`), mas ainda não tem botão na interface.
+- Placeholder "Buscar..." não aparece (CustomTkinter ignora placeholder quando o campo usa textvariable).
+- Não testado em Windows de verdade (desenvolvido e testado em Linux com Xvfb).
