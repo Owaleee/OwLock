@@ -201,6 +201,7 @@ Próximos passos previstos:
 - Geração de códigos TOTP.
 - Importação e exportação em CSV.
 - Categorias para organizar as contas.
+- Ícones das plataformas (Discord, Steam, GitHub...) embutidos no app, sem buscar nada na internet.
 - Formato de cofre v2 com Chave Secreta (para sincronizar com segurança entre computador e celular).
 
 ## Licença

@@ -16,7 +16,28 @@ const ICONS = {
   copy: [['rect', { x: 8, y: 8, width: 12, height: 12, rx: 3 }], ['path', { d: 'M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2' }]],
   back: [['path', { d: 'M15 6l-6 6 6 6' }]],
   close: [['path', { d: 'M6 6l12 12M18 6L6 18' }]],
+  chevron: [['path', { d: 'M9 6l6 6-6 6' }]],
+  none: [['circle', { cx: 12, cy: 12, r: 8 }], ['path', { d: 'M6.3 17.7L17.7 6.3' }]],
+  user: [['circle', { cx: 12, cy: 8, r: 4 }], ['path', { d: 'M4 21a8 8 0 0 1 16 0' }]],
+  briefcase: [['rect', { x: 3, y: 7, width: 18, height: 13, rx: 3 }], ['path', { d: 'M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M3 13h18' }]],
+  gamepad: [['path', { d: 'M6 8h12a4 4 0 0 1 4 4v2a3 3 0 0 1-5.2 2L15 14H9l-1.8 2A3 3 0 0 1 2 14v-2a4 4 0 0 1 4-4z' }], ['path', { d: 'M7 11v3M5.5 12.5h3M16 11h.01M18 13h.01' }]],
+  chat: [['path', { d: 'M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.5A8 8 0 1 1 21 12z' }]],
+  card: [['rect', { x: 2, y: 5, width: 20, height: 14, rx: 3 }], ['path', { d: 'M2 10h20M6 15h4' }]],
+  play: [['circle', { cx: 12, cy: 12, r: 9 }], ['path', { d: 'M10 8.5l5 3.5-5 3.5z' }]],
+  home: [['path', { d: 'M3 11l9-8 9 8' }], ['path', { d: 'M5 10v10h5v-6h4v6h5V10' }]],
+  cart: [['circle', { cx: 9, cy: 20, r: 1.5 }], ['circle', { cx: 18, cy: 20, r: 1.5 }], ['path', { d: 'M2 3h3l2.7 12.4a2 2 0 0 0 2 1.6h7.7a2 2 0 0 0 2-1.5L21 7H6' }]],
+  school: [['path', { d: 'M2 9l10-5 10 5-10 5z' }], ['path', { d: 'M6 11.5V16c0 1.5 3 3 6 3s6-1.5 6-3v-4.5' }]],
+  code: [['path', { d: 'M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16' }]],
+  heart: [['path', { d: 'M12 20s-8-4.6-8-10a4.5 4.5 0 0 1 8-2.8A4.5 4.5 0 0 1 20 10c0 5.4-8 10-8 10z' }]],
+  star: [['path', { d: 'M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z' }]],
 };
+
+const COLOR_NAMES = { mint: 'Menta', blue: 'Azul', violet: 'Violeta', pink: 'Rosa', amber: 'Âmbar', coral: 'Coral', lime: 'Lima', gray: 'Cinza' };
+const ICON_NAMES = {
+  user: 'Pessoa', briefcase: 'Maleta', gamepad: 'Controle', chat: 'Conversa', card: 'Cartão', play: 'Reprodução',
+  home: 'Casa', cart: 'Carrinho', school: 'Escola', code: 'Código', heart: 'Coração', star: 'Estrela',
+};
+const MAX_CATEGORY_NAME = 24;
 
 function svg(tag, attrs = {}) {
   const el = document.createElementNS(SVG_NS, tag);
@@ -29,7 +50,7 @@ function icon(name, size = 18, strokeWidth = 2) {
     width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
     'stroke-width': strokeWidth, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true',
   });
-  for (const [tag, attrs] of ICONS[name]) el.append(svg(tag, attrs));
+  for (const [tag, attrs] of ICONS[name] || ICONS.star) el.append(svg(tag, attrs));
   return el;
 }
 
@@ -101,6 +122,9 @@ const state = {
   deadline: 0,
   lastTouch: 0,
   loadSeq: 0,
+  categories: [],
+  categoryFilter: '', // '' = todas, 'none' = sem categoria, ou id
+  options: { colors: [], icons: [] },
   gen: null,
 };
 
@@ -116,6 +140,7 @@ function wipeState() {
   Object.assign(state, {
     unlocked: false, view: 'vault', screen: 'list', filter: 'all', query: '', entries: [],
     stats: { ...EMPTY_STATS }, selected: null, revealed: null, copied: null, gen: null, deadline: 0,
+    categories: [], categoryFilter: '',
   });
   ui = {};
   root.replaceChildren();
@@ -445,6 +470,7 @@ async function enterMain(status) {
   state.status = status;
   buildShell();
   startTimer(typeof status.seconds_left === 'number' ? status.seconds_left : status.auto_lock_seconds || 300);
+  await Promise.all([loadOptions(), loadCategories()]);
   await loadEntries();
   if (state.entries.length && !state.selected) {
     state.selected = state.entries[0];
@@ -507,6 +533,12 @@ function buildListColumn() {
 
   ui.tabsBox = h('div', { class: 'segmented', role: 'tablist', 'aria-label': 'Filtro', 'data-index': '0' },
     h('span', { class: 'seg-thumb', 'aria-hidden': 'true' }), ui.tabs);
+  ui.catStrip = h('div', { class: 'cat-strip', id: 'cat-strip', role: 'group', 'aria-label': 'Categorias' });
+  ui.catStrip.addEventListener('wheel', (event) => {
+    if (ui.catStrip.scrollWidth <= ui.catStrip.clientWidth || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+    ui.catStrip.scrollLeft += event.deltaY;
+    event.preventDefault();
+  }, { passive: false });
   ui.statsMobile = h('div', { class: 'stats stats-mobile' });
   ui.rows = h('div', { class: 'rows', id: 'entry-list' });
 
@@ -517,6 +549,7 @@ function buildListColumn() {
     h('div', { class: 'list-head' }, h('h2', { text: 'Cofre' }), ui.timer),
     ui.statsMobile,
     h('label', { class: 'search' }, icon('search', 16), ui.search, ui.searchClear),
+    ui.catStrip,
     ui.tabsBox,
     ui.rows,
     newButton);
@@ -566,7 +599,7 @@ function setFilter(filter) {
 
 async function loadEntries() {
   const seq = ++state.loadSeq;
-  const r = await call('list_entries', state.query, state.filter);
+  const r = await call('list_entries', state.query, state.filter, state.categoryFilter);
   if (seq !== state.loadSeq || !state.unlocked) return;
   if (!r.ok) {
     if (r.error !== 'locked') toast(apiMessage(r), 'warn');
@@ -579,6 +612,7 @@ async function loadEntries() {
     if (fresh) state.selected = fresh;
   }
   renderStats();
+  renderCategories();
   renderList();
 }
 
@@ -607,7 +641,16 @@ function renderStats() {
 }
 
 function emptyList() {
-  const searching = state.query !== '' || state.filter !== 'all';
+  const activeCategory = state.categories.find((category) => category.id === state.categoryFilter);
+  if (activeCategory && state.query === '' && state.filter === 'all') {
+    return h('div', { class: 'empty', id: 'empty-category' },
+      h('div', { class: 'empty-icon cat-tile' }, tint(icon(activeCategory.icon, 24), activeCategory.color_hex)),
+      h('h3', { text: `Nenhuma conta em ${activeCategory.name}` }),
+      h('p', { text: 'Quando você adicionar contas a esta categoria, elas aparecem aqui.' }),
+      h('button', { class: 'btn btn-primary', id: 'empty-new', type: 'button', onClick: () => openEntryForm(null) },
+        icon('plus', 16, 2.4), 'Nova conta'));
+  }
+  const searching = state.query !== '' || state.filter !== 'all' || state.categoryFilter !== '';
   if (searching) {
     return h('div', { class: 'empty' },
       h('div', { class: 'empty-icon' }, icon('search', 22)),
@@ -636,7 +679,7 @@ function renderList() {
       type: 'button', 'data-id': entry.id,
       onClick: () => selectEntry(entry.id, true),
     },
-      h('span', { class: 'mono-badge', 'aria-hidden': 'true', text: monogram(entry) }),
+      monoBadge(entry),
       h('span', { class: 'row-text' },
         h('span', { class: 'row-name', text: entry.service }),
         h('span', { class: 'row-user', text: entry.username || '' })),
@@ -645,6 +688,15 @@ function renderList() {
     return row;
   });
   ui.rows.replaceChildren(...rows);
+}
+
+function monoBadge(entry) {
+  const el = h('span', { class: 'mono-badge', 'aria-hidden': 'true', text: monogram(entry) });
+  if (entry.category) {
+    el.classList.add('cat');
+    el.style.setProperty('--cat', entry.category.color_hex);
+  }
+  return el;
 }
 
 function monogram(entry) {
@@ -711,9 +763,10 @@ function renderDetail({ first = false } = {}) {
   const card = h('article', { class: first ? 'detail ow-in' : 'detail ow-swap', 'aria-label': `Detalhes de ${entry.service}` },
     h('button', { class: 'btn back-btn', id: 'back', type: 'button', onClick: () => setScreen('list') }, icon('back', 22, 2.2), 'Cofre'),
     h('header', { class: 'detail-head' },
-      h('span', { class: 'mono-badge', 'aria-hidden': 'true', text: monogram(entry) }),
+      monoBadge(entry),
       h('div', { class: 'detail-title' },
         h('h1', { id: 'detail-name', text: entry.service }),
+        entry.category ? detailCategory(entry.category) : null,
         h('span', { text: `Atualizada ${timeAgo(entry.updated_at)}`.trim() })),
       h('button', { class: 'btn btn-ghost small', id: 'edit-entry', type: 'button', onClick: () => openEntryForm(entry) }, 'Editar')),
     h('div', { class: 'group' }, infoRows),
@@ -846,6 +899,21 @@ function openEntryForm(entry) {
   twofaBox.addEventListener('change', syncTwofa);
   syncTwofa();
 
+  let categoryId = editing ? entry.category_id || '' : (state.categoryFilter && state.categoryFilter !== 'none' ? state.categoryFilter : '');
+  const categoryPicker = h('div', { class: 'cat-strip in-form', id: 'form-categories', role: 'radiogroup', 'aria-label': 'Categoria' });
+  const paintCategoryPicker = () => {
+    const choose = (id) => {
+      categoryId = id;
+      paintCategoryPicker();
+    };
+    const options = [{ id: '', name: 'Nenhuma', icon: 'none', color_hex: '#A1A6B4' }, ...state.categories];
+    categoryPicker.replaceChildren(...options.map((option) => catPill({
+      name: option.name, hex: option.color_hex, iconName: option.icon, selected: categoryId === option.id,
+      role: 'radio', onClick: () => choose(option.id), id: `form-cat-${option.id || 'none'}`,
+    })));
+  };
+  paintCategoryPicker();
+
   const notes = h('textarea', { class: 'row-input', id: 'form-notes', rows: '3', value: editing ? entry.notes || '' : '' });
   const error = h('p', { class: 'msg error', id: 'form-error', role: 'alert' });
   const submit = h('button', { class: 'btn btn-primary', id: 'form-submit', type: 'submit' }, 'Salvar');
@@ -900,6 +968,7 @@ function openEntryForm(entry) {
       h('label', { class: 'group-row switch-row', for: 'form-2fa' }, h('span', { class: 'row-k grow', text: 'Verificação em duas etapas (2FA)' }), twofaBox),
       h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'form-2fa-app', text: 'App autenticador' }), twofaApp)),
     h('div', { class: 'group' },
+      h('div', { class: 'group-row stacked' }, h('span', { class: 'row-k', id: 'form-cat-label', text: 'Categoria' }), categoryPicker),
       h('div', { class: 'group-row stacked' }, h('label', { class: 'row-k', for: 'form-notes', text: 'Notas' }), notes)),
     error,
     h('div', { class: 'modal-actions' }, cancel, submit));
@@ -921,6 +990,7 @@ function openEntryForm(entry) {
       service,
       username: userInput.value.trim(),
       password: editing && typed === '' ? null : typed,
+      category_id: categoryId,
       has_2fa: twofaBox.checked,
       twofa_app: twofaBox.checked ? twofaApp.value.trim() : '',
       notes: notes.value,
@@ -955,13 +1025,275 @@ async function afterSave(saved) {
   state.filter = 'all';
   ui.search.value = '';
   ui.searchClear.hidden = true;
+  state.categoryFilter = '';
   syncTabs();
   state.selected = saved;
-  await loadEntries();
+  await Promise.all([loadCategories(), loadEntries()]);
   state.copied = null;
   renderDetail();
   setScreen('detail');
   toast('Conta salva');
+}
+
+/* ======================================================================
+   Categorias
+   ====================================================================== */
+
+async function loadOptions() {
+  const r = await call('category_options');
+  if (r.ok) state.options = { colors: r.colors || [], icons: r.icons || [] };
+}
+
+async function loadCategories() {
+  const r = await call('list_categories');
+  if (!r.ok || !state.unlocked) return;
+  state.categories = r.categories;
+  renderCategories();
+  if (state.view === 'settings' && ui.catSettings) renderCategorySettings();
+}
+
+function tint(el, hex) {
+  el.style.setProperty('color', hex);
+  return el;
+}
+
+/* Pílula de categoria (faixa da lista, formulário e pré-visualização). */
+function catPill({ name, hex, iconName, count = null, selected = false, onClick, id, role = null, label = null }) {
+  const pill = h('button', {
+    class: 'btn cat-pill', type: 'button', 'aria-pressed': selected ? 'true' : 'false',
+    ...(id ? { id } : {}), ...(role ? { role, 'aria-checked': selected ? 'true' : 'false' } : {}),
+    ...(label ? { 'aria-label': label } : {}),
+  }, icon(iconName, 16), h('span', { class: 'cat-name', text: name }),
+  count != null ? h('span', { class: 'cat-count', text: String(count) }) : null);
+  if (role) pill.removeAttribute('aria-pressed');
+  pill.style.setProperty('--cat', hex);
+  if (onClick) pill.addEventListener('click', onClick);
+  return pill;
+}
+
+function renderCategories() {
+  if (!ui.catStrip) return;
+  const keep = ui.catStrip.scrollLeft;
+  const current = state.categoryFilter;
+  const pills = [catPill({
+    id: 'cat-all', name: 'Todas', hex: '#9FE3D3', iconName: 'vault', count: state.stats.total,
+    selected: current === '', onClick: () => setCategoryFilter(''),
+  })];
+  for (const category of state.categories) {
+    pills.push(catPill({
+      id: `cat-${category.id}`, name: category.name, hex: category.color_hex, iconName: category.icon, count: category.count,
+      selected: current === category.id, onClick: () => setCategoryFilter(category.id),
+    }));
+  }
+  if (state.stats.uncategorized > 0 || current === 'none') {
+    pills.push(catPill({
+      id: 'cat-none', name: 'Sem categoria', hex: '#A1A6B4', iconName: 'none', count: state.stats.uncategorized || 0,
+      selected: current === 'none', onClick: () => setCategoryFilter('none'),
+    }));
+  }
+  pills.push(catPill({
+    id: 'cat-add', name: '', hex: '#9FE3D3', iconName: 'plus', label: 'Nova categoria',
+    onClick: () => openCategoryEditor(null),
+  }));
+  pills[pills.length - 1].classList.add('cat-add');
+  ui.catStrip.replaceChildren(...pills);
+  ui.catStrip.scrollLeft = keep;
+  // garante que a pílula ativa fique visível (ex.: filtro vindo da pílula do detalhe)
+  const active = pills.find((pill) => pill.classList.contains('is-selected') || pill.getAttribute('aria-pressed') === 'true');
+  if (active) {
+    const strip = ui.catStrip;
+    const left = active.getBoundingClientRect().left - strip.getBoundingClientRect().left + strip.scrollLeft;
+    const right = left + active.offsetWidth;
+    if (left < strip.scrollLeft || right > strip.scrollLeft + strip.clientWidth) {
+      strip.scrollTo({ left: Math.max(0, left - 24), behavior: 'smooth' });
+    }
+  }
+}
+
+function setCategoryFilter(id) {
+  state.categoryFilter = state.categoryFilter === id ? '' : id;
+  renderCategories();
+  loadEntries();
+}
+
+function detailCategory(category) {
+  const chip = h('button', {
+    class: 'btn cat-chip', id: 'detail-category', type: 'button', 'aria-label': `Filtrar por ${category.name}`,
+    onClick: () => {
+      state.categoryFilter = category.id;
+      setScreen('list');
+      renderCategories();
+      loadEntries();
+    },
+  }, icon(category.icon, 14), h('span', { text: category.name }));
+  chip.style.setProperty('--cat', category.color_hex);
+  return chip;
+}
+
+/* Ajustes > Categorias */
+function renderCategorySettings() {
+  const rows = state.categories.map((category) => {
+    const tile = h('span', { class: 'cat-tile', 'aria-hidden': 'true' }, icon(category.icon, 18));
+    tile.style.setProperty('--cat', category.color_hex);
+    return h('button', {
+      class: 'btn group-row cat-row', type: 'button', 'data-cat-id': category.id,
+      onClick: () => openCategoryEditor(category),
+    }, tile,
+    h('span', { class: 'row-k grow', text: category.name }),
+    h('span', { class: 'cat-row-count', text: String(category.count) }),
+    h('span', { class: 'chev', 'aria-hidden': 'true' }, icon('chevron', 16, 2.4)));
+  });
+  rows.push(h('button', { class: 'btn group-row cat-row cat-new', id: 'settings-new-category', type: 'button', onClick: () => openCategoryEditor(null) },
+    h('span', { class: 'cat-tile mint', 'aria-hidden': 'true' }, icon('plus', 18, 2.4)),
+    h('span', { class: 'row-k grow', text: 'Nova categoria' })));
+  ui.catSettings.replaceChildren(
+    h('h2', { class: 'group-title', text: 'Categorias' }),
+    h('div', { class: 'group', id: 'category-group' }, rows));
+}
+
+/* Editor de categoria (modal no desktop, sheet no celular) */
+function openCategoryEditor(category) {
+  const editing = Boolean(category);
+  const colors = state.options.colors;
+  const icons = state.options.icons;
+  const draft = {
+    name: editing ? category.name : '',
+    color: editing ? category.color : (colors[0]?.key || 'mint'),
+    icon: editing ? category.icon : (icons.includes('star') ? 'star' : icons[0] || 'star'),
+  };
+  const hexOf = (key) => colors.find((c) => c.key === key)?.hex || '#9FE3D3';
+
+  const nameInput = h('input', { class: 'row-input', id: 'cat-name', type: 'text', maxlength: String(MAX_CATEGORY_NAME), autocomplete: 'off', value: draft.name, placeholder: 'Ex.: Estudos', 'data-autofocus': '' });
+  const counter = h('span', { class: 'cat-counter', id: 'cat-counter', 'aria-hidden': 'true' });
+  const preview = h('div', { class: 'cat-preview', id: 'cat-preview', 'aria-label': 'Pré-visualização' });
+  const colorGrid = h('div', { class: 'color-grid', role: 'radiogroup', 'aria-label': 'Cor' });
+  const iconGrid = h('div', { class: 'icon-grid', role: 'radiogroup', 'aria-label': 'Ícone' });
+  const error = h('p', { class: 'msg error', id: 'cat-error', role: 'alert' });
+
+  const paint = () => {
+    const hex = hexOf(draft.color);
+    counter.textContent = `${draft.name.length}/${MAX_CATEGORY_NAME}`;
+    const pill = catPill({ name: draft.name.trim() || 'Nome da categoria', hex, iconName: draft.icon, selected: true });
+    pill.tabIndex = -1;
+    pill.setAttribute('aria-hidden', 'true');
+    preview.replaceChildren(pill);
+    colorGrid.replaceChildren(...colors.map((color) => {
+      const dot = h('button', {
+        class: 'btn color-dot', type: 'button', role: 'radio', 'aria-checked': color.key === draft.color ? 'true' : 'false',
+        'aria-label': COLOR_NAMES[color.key] || color.key, id: `cat-color-${color.key}`,
+        onClick: () => { draft.color = color.key; paint(); },
+      });
+      dot.style.setProperty('--cat', color.hex);
+      return dot;
+    }));
+    iconGrid.replaceChildren(...icons.map((key) => {
+      const button = h('button', {
+        class: 'btn icon-pick', type: 'button', role: 'radio', 'aria-checked': key === draft.icon ? 'true' : 'false',
+        'aria-label': ICON_NAMES[key] || key, id: `cat-icon-${key}`,
+        onClick: () => { draft.icon = key; paint(); },
+      }, icon(key, 22));
+      button.style.setProperty('--cat', hex);
+      return button;
+    }));
+  };
+  nameInput.addEventListener('input', () => {
+    draft.name = nameInput.value;
+    counter.textContent = `${draft.name.length}/${MAX_CATEGORY_NAME}`;
+    const pill = preview.firstChild;
+    if (pill) pill.querySelector('.cat-name').textContent = draft.name.trim() || 'Nome da categoria';
+  });
+
+  const submit = h('button', { class: 'btn btn-primary', id: 'cat-save', type: 'submit' }, 'Salvar');
+  const actions = h('div', { class: 'modal-actions' });
+  if (editing) {
+    actions.append(h('button', { class: 'btn btn-ghost danger push-left', id: 'cat-delete', type: 'button', onClick: () => confirmDeleteCategory(category) }, 'Excluir categoria'));
+  }
+  actions.append(h('button', { class: 'btn btn-ghost', id: 'cat-cancel', type: 'button', onClick: closeModal }, 'Cancelar'), submit);
+
+  const form = h('form', { novalidate: '' },
+    h('div', { class: 'cat-preview-wrap' }, preview),
+    h('div', { class: 'group' }, h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'cat-name', text: 'Nome' }), nameInput, counter)),
+    h('div', { class: 'group' }, h('div', { class: 'group-row stacked' }, h('span', { class: 'row-k', text: 'Cor' }), colorGrid)),
+    h('div', { class: 'group' }, h('div', { class: 'group-row stacked' }, h('span', { class: 'row-k', text: 'Ícone' }), iconGrid)),
+    error,
+    actions);
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (submit.disabled) return;
+    error.textContent = '';
+    if (!draft.name.trim()) {
+      error.textContent = 'Informe o nome da categoria.';
+      nameInput.focus();
+      return;
+    }
+    submit.disabled = true;
+    submit.textContent = 'Salvando...';
+    const data = { name: draft.name.trim(), color: draft.color, icon: draft.icon };
+    if (editing) data.id = category.id;
+    const r = await call('save_category', data);
+    if (!r.ok) {
+      if (r.error === 'locked') return;
+      submit.disabled = false;
+      submit.textContent = 'Salvar';
+      error.textContent = apiMessage(r, 'Não foi possível salvar a categoria.');
+      return;
+    }
+    closeModal();
+    await Promise.all([loadCategories(), loadEntries()]);
+    if (state.selected) {
+      const fresh = state.entries.find((item) => item.id === state.selected.id);
+      if (fresh) {
+        state.selected = fresh;
+        if (state.view === 'vault') renderDetail();
+      }
+    }
+    toast('Categoria salva');
+  });
+
+  const card = h('div', { class: 'modal', 'aria-labelledby': 'cat-title' },
+    h('div', { class: 'modal-head' },
+      h('h2', { id: 'cat-title', text: editing ? 'Editar categoria' : 'Nova categoria' }),
+      h('button', { class: 'btn btn-icon', type: 'button', 'aria-label': 'Fechar', onClick: closeModal }, icon('close', 18))),
+    form);
+  paint();
+  openModal(card);
+}
+
+function confirmDeleteCategory(category) {
+  const n = category.count;
+  const consequence = n === 0
+    ? 'Nenhuma conta usa esta categoria.'
+    : n === 1 ? 'A 1 conta desta categoria ficará sem categoria.' : `As ${n} contas desta categoria ficarão sem categoria.`;
+  const error = h('p', { class: 'msg error', role: 'alert' });
+  const confirmButton = h('button', { class: 'btn btn-primary danger', id: 'confirm-delete-category', type: 'button', 'data-autofocus': '' }, 'Excluir');
+  confirmButton.addEventListener('click', async () => {
+    confirmButton.disabled = true;
+    const r = await call('delete_category', category.id);
+    if (!r.ok) {
+      if (r.error === 'locked') return;
+      confirmButton.disabled = false;
+      error.textContent = apiMessage(r, 'Não foi possível excluir a categoria.');
+      return;
+    }
+    closeModal();
+    if (state.categoryFilter === category.id) state.categoryFilter = '';
+    await Promise.all([loadCategories(), loadEntries()]);
+    if (state.selected) {
+      const fresh = state.entries.find((item) => item.id === state.selected.id);
+      if (fresh) state.selected = fresh;
+      if (state.view === 'vault') renderDetail();
+    }
+    toast('Categoria excluída');
+  });
+  const card = h('div', { class: 'modal narrow', 'aria-labelledby': 'delete-cat-title' },
+    h('h2', { id: 'delete-cat-title', text: 'Excluir categoria?' }),
+    h('p', { class: 'lead' }, 'Você vai excluir ', h('strong', { text: category.name }), `. ${consequence}`),
+    error,
+    h('div', { class: 'modal-actions' },
+      h('button', { class: 'btn btn-ghost', id: 'cancel-delete-category', type: 'button', onClick: closeModal }, 'Cancelar'),
+      confirmButton));
+  openModal(card, { dismissOnBackdrop: true });
 }
 
 /* ======================================================================
@@ -984,7 +1316,7 @@ function confirmDelete(entry) {
     hideReveal();
     state.selected = null;
     state.copied = null;
-    await loadEntries();
+    await Promise.all([loadCategories(), loadEntries()]);
     renderDetail();
     setScreen('list');
     toast('Conta excluída');
@@ -1122,9 +1454,12 @@ function buildSettings() {
   });
 
   const minutes = Math.round((state.status?.auto_lock_seconds || 300) / 60);
+  ui.catSettings = h('div', { class: 'settings-stack ow-in', id: 'cat-settings' });
+  renderCategorySettings();
   ui.paneSettings.replaceChildren(
     h('div', { class: 'page-title' }, h('h1', { text: 'Ajustes' }), h('p', { text: 'Segurança e informações do cofre.' })),
     h('div', { class: 'settings-stack ow-in' }, h('h2', { class: 'group-title', text: 'Senha mestra' }), form),
+    ui.catSettings,
     h('div', { class: 'settings-stack ow-in' },
       h('h2', { class: 'group-title', text: 'Cofre' }),
       h('div', { class: 'group' },

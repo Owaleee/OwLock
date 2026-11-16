@@ -61,6 +61,41 @@ async function clickRow(page, service) {
   if (!clicked) fail(`conta "${service}" não está na lista`);
 }
 
+async function clickCategory(page, name) {
+  const ok = await page.evaluate((wanted) => {
+    for (const pill of document.querySelectorAll('#cat-strip .cat-pill')) {
+      if (pill.querySelector('.cat-name')?.textContent === wanted) {
+        pill.click();
+        return true;
+      }
+    }
+    return false;
+  }, name);
+  if (!ok) fail(`categoria "${name}" não está na faixa`);
+}
+
+async function rowNames(page) {
+  return page.$$eval('#entry-list .row .row-name', (els) => els.map((el) => el.textContent).sort());
+}
+
+async function pillCounts(page) {
+  return page.$$eval('#cat-strip .cat-pill', (pills) => Object.fromEntries(
+    pills.map((p) => [p.querySelector('.cat-name')?.textContent || '+', p.querySelector('.cat-count')?.textContent ?? ''])));
+}
+
+async function chooseInForm(page, name) {
+  const ok = await page.evaluate((wanted) => {
+    for (const pill of document.querySelectorAll('#form-categories .cat-pill')) {
+      if (pill.querySelector('.cat-name')?.textContent === wanted) {
+        pill.click();
+        return true;
+      }
+    }
+    return false;
+  }, name);
+  if (!ok) fail(`categoria "${name}" não está no formulário`);
+}
+
 async function main() {
   const browser = await puppeteer.launch({
     executablePath: CHROME,
@@ -119,6 +154,24 @@ async function main() {
     await page.click('#tab-all');
     await waitRows(page, 6, 'aba Todas');
     log('segmented control troca de aba (Atenção = 1 conta)');
+
+    // categorias: faixa, filtro e combinação com a aba Atenção
+    const counts = await pillCounts(page);
+    if (!('Todas' in counts) || !('Jogos' in counts) || counts.Todas !== '6') fail(`faixa de categorias inesperada: ${JSON.stringify(counts)}`);
+    log(`faixa de categorias com contadores ${JSON.stringify(counts)}`);
+    await clickCategory(page, 'Jogos');
+    await waitRows(page, 3, 'categoria Jogos');
+    const games = (await rowNames(page)).join(',');
+    if (games !== 'Discord,Epic Games,Steam') fail(`contas de Jogos inesperadas: ${games}`);
+    log('categoria Jogos filtra Steam/Discord/Epic');
+    await shot(page, '12-faixa-categorias');
+    await page.click('#tab-attention');
+    await waitRows(page, 1, 'Jogos + Atenção');
+    if ((await rowNames(page))[0] !== 'Discord') fail('Jogos + Atenção deveria mostrar só o Discord');
+    log('Jogos + Atenção = Discord');
+    await page.click('#tab-all');
+    await clickCategory(page, 'Jogos');
+    await waitRows(page, 6, 'categoria desmarcada');
 
     // (d) Discord com força fraca
     await clickRow(page, 'Discord');
@@ -185,6 +238,61 @@ async function main() {
     await waitRows(page, 6, 'depois de excluir');
     log('exclusão pede confirmação e remove a conta (volta a 6)');
 
+    // categorias: criar, usar, excluir
+    await page.click('#nav-settings');
+    await page.waitForSelector('#settings-new-category');
+    await page.click('#settings-new-category');
+    await page.waitForSelector('#cat-name');
+    await page.type('#cat-name', 'Estudos');
+    await page.click('#cat-color-blue');
+    await page.click('#cat-icon-school');
+    await page.waitForFunction(() => document.querySelector('#cat-counter').textContent === '7/24');
+    await shot(page, '13-editor-categoria');
+    await page.click('#cat-save');
+    await page.waitForSelector('#cat-name', { hidden: true });
+    await page.waitForFunction(() => [...document.querySelectorAll('#category-group .cat-row')].some((r) => r.textContent.includes('Estudos')));
+    log('categoria "Estudos" criada pelo editor (Azul, escola)');
+    await page.evaluate(() => document.querySelector('#category-group').scrollIntoView({ block: 'center' }));
+    await shot(page, '14-ajustes-categorias');
+
+    await page.click('#nav-vault');
+    await page.waitForSelector('#entry-list .row');
+    await clickRow(page, 'Google');
+    await page.waitForFunction(() => document.querySelector('#detail-name')?.textContent === 'Google');
+    await page.click('#edit-entry');
+    await page.waitForSelector('#form-categories');
+    await chooseInForm(page, 'Estudos');
+    await page.click('#form-submit');
+    await page.waitForSelector('#form-service', { hidden: true });
+    await page.waitForFunction(() => document.querySelector('#detail-category')?.textContent === 'Estudos');
+    const afterMove = await pillCounts(page);
+    if (afterMove.Estudos !== '1') fail(`contador de Estudos inesperado: ${JSON.stringify(afterMove)}`);
+    log('conta Google movida para Estudos (pílula no detalhe, contador 1)');
+    await page.click('#detail-category');
+    await waitRows(page, 1, 'clique na pílula do detalhe');
+    log('pílula do detalhe filtra por Estudos');
+    await clickCategory(page, 'Estudos');
+    await waitRows(page, 6, 'categoria desmarcada');
+
+    await page.click('#nav-settings');
+    await page.waitForSelector('#category-group');
+    await page.evaluate(() => {
+      for (const row of document.querySelectorAll('#category-group .cat-row')) if (row.textContent.includes('Estudos')) row.click();
+    });
+    await page.waitForSelector('#cat-delete');
+    await page.click('#cat-delete');
+    await page.waitForSelector('#confirm-delete-category');
+    const catLead = await page.$eval('.modal .lead', (el) => el.textContent);
+    if (!/ficará sem categoria|ficarão sem categoria/.test(catLead)) fail(`texto de exclusão de categoria inesperado: ${catLead}`);
+    await page.click('#confirm-delete-category');
+    await page.waitForFunction(() => ![...document.querySelectorAll('#category-group .cat-row')].some((r) => r.textContent.includes('Estudos')));
+    await page.click('#nav-vault');
+    await page.waitForSelector('#entry-list .row');
+    await clickRow(page, 'Google');
+    await page.waitForFunction(() => document.querySelector('#detail-name')?.textContent === 'Google');
+    if (await page.$('#detail-category')) fail('a conta Google deveria ter ficado sem categoria');
+    log('categoria excluída: a conta ficou sem categoria');
+
     // (g) gerador, ajustes, celular
     await page.click('#nav-generator');
     await page.waitForFunction(() => document.querySelector('#gen-output')?.textContent.length >= 20);
@@ -204,6 +312,9 @@ async function main() {
     await page.setViewport({ width: 390, height: 844, isMobile: true, deviceScaleFactor: 2 });
     await page.waitForSelector('#entry-list .row'); // o modo celular recarrega a página
     await shot(page, '07-celular-lista');
+    const stripScrolls = await page.$eval('#cat-strip', (el) => el.scrollWidth > el.clientWidth);
+    if (!stripScrolls) fail('a faixa de categorias deveria rolar no celular');
+    log('celular: faixa de categorias rolável');
     await clickRow(page, 'Google');
     await page.waitForFunction(() => document.querySelector('#detail-name')?.textContent === 'Google');
     await shot(page, '08-celular-detalhe');
@@ -228,6 +339,10 @@ async function main() {
 
     if (problems.length) fail(`problemas no navegador:\n  ${problems.join('\n  ')}`);
     log('nenhum erro de console e nenhuma requisição externa');
+  } catch (error) {
+    const pages = await browser.pages();
+    await pages[pages.length - 1]?.screenshot({ path: `${SHOTS}/falha.png` }).catch(() => {});
+    throw error;
   } finally {
     await browser.close();
   }

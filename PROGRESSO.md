@@ -98,8 +98,10 @@ MIN_MASTER_PASSWORD_LENGTH = 8                                  (em vault.py; cr
 - [x] CI: testes no Linux e no Windows
 - [x] Testado manualmente no Windows 11 (criar, adicionar, copiar, editar, excluir, bloquear/desbloquear)
 
+- [x] Interface nova em HTML/CSS/JS (pywebview), visual estilo iOS e logo própria
+- [x] Categorias (Fase 3)
+
 ## Próximos passos
-- Modernizar o visual da interface.
 - App de celular lendo o mesmo formato de cofre.
 
 ## Fase 2 — Interface nova (web dentro de janela nativa)
@@ -162,3 +164,63 @@ shutdown() -> ok                                    # limpa a área de transfer�
 `password_strength(password: str) -> dict {score: 0..4, label}`; rótulos: 0 "Muito fraca", 1 "Fraca", 2 "Razoável", 3 "Boa", 4 "Forte".
 Heurística simples: comprimento, variedade de tipos de caractere, penalidade para sequências (123, abc, qwerty),
 anos (19xx/20xx), repetição e uma lista curta de senhas comuns.
+
+## Fase 3 — Categorias
+
+Objetivo: organizar as contas em categorias (Pessoal, Jogos, Trabalho...), com cor e ícone, filtrar por elas e gerenciá-las.
+
+### Núcleo
+- `models.py`: `Category` (dataclass): `name: str`, `color: str` (chave da paleta), `icon: str` (chave da lista de ícones),
+  `id: str = uuid4().hex`; `to_dict()` / `from_dict()` (ignora chaves desconhecidas; exige `id` e `name`).
+  `Entry` ganha `category_id: str = ""` ("" = sem categoria). Cofres antigos continuam abrindo (from_dict já ignora/assume padrão).
+- Paleta (`CATEGORY_COLORS`, chave → hex): mint #9FE3D3, blue #7AB8FF, violet #B69CFF, pink #FF8FB8, amber #FFB347,
+  coral #FF7A6B, lime #B8E986, gray #A1A6B4.
+- Ícones (`CATEGORY_ICONS`): user, briefcase, gamepad, chat, card, play, home, cart, school, code, heart, star.
+- Texto claro do cofre passa a ser `{"entries": [...], "categories": [...]}`. O formato do arquivo continua `version: 1`
+  (a mudança é só dentro do conteúdo cifrado, e é compatível).
+- Ao abrir um cofre cujo conteúdo NÃO tem a chave `"categories"` (cofres criados antes desta fase), e ao criar um cofre novo,
+  o cofre recebe as categorias padrão: Pessoal (mint, user), Trabalho (blue, briefcase), Jogos (violet, gamepad),
+  Redes sociais (pink, chat), Financeiro (amber, card), Streaming (coral, play). Se a chave existir (mesmo vazia), nada é criado.
+- `Vault`: `categories: list[Category]`; `add_category(c)`, `update_category(c)` (KeyError se não existir),
+  `delete_category(id)` (KeyError; as contas dessa categoria ficam com `category_id = ""`; tudo num único save),
+  com o mesmo rollback em memória das outras operações se o save falhar.
+
+### Api (acréscimos)
+```
+list_categories() -> {ok, categories: [CategorySummary]}          # na ordem salva
+    CategorySummary = {id, name, color, color_hex, icon, count}    # count = contas nessa categoria
+save_category(data) -> {ok, category: CategorySummary} | name_required | name_too_long (> 24) | name_exists (casefold)
+                       | invalid_color | invalid_icon | too_many (> 30) | not_found | save_failed
+    data = {id?, name, color, icon}; sem id = nova; com id = edição
+delete_category(id) -> {ok, moved: <n contas que ficaram sem categoria>} | not_found | save_failed
+list_entries(query="", filter="all", category="") -> ... (igual) + category: "" = todas, "none" = sem categoria, senão o id
+    | invalid_category (id inexistente)
+    stats ganha "uncategorized": n
+EntrySummary ganha: category_id, category: CategorySummary-sem-count | null
+save_entry(data): data ganha category_id ("" ou id existente; inexistente → invalid_category)
+category_options() -> {ok, colors: [{key, hex}], icons: [key]}   # não exige cofre aberto
+```
+
+### Interface
+- Faixa de categorias na coluna da lista, abaixo da busca e acima do segmented control: pílulas de vidro roláveis na
+  horizontal ("Todas" primeiro, depois cada categoria com ícone na cor dela, nome e contador; "Sem categoria" só aparece se houver
+  contas sem categoria; no fim, uma pílula "+" para criar). A selecionada fica preenchida com a cor da categoria em tom suave e um halo.
+  Combina com os filtros Todas/Com 2FA/Atenção (os dois filtros valem juntos).
+- Linha da lista: o monograma ganha um degradê sutil na cor da categoria.
+- Detalhe: uma pílula com ícone + nome da categoria abaixo do nome do serviço.
+- Formulário de conta: seletor de categoria em pílulas (com "Nenhuma").
+- Ajustes > Categorias (lista agrupada estilo iOS): ícone colorido, nome, contador, toque para editar; botão "Nova categoria".
+- Editor de categoria (modal/sheet): nome, grade de 8 cores (bolinhas com halo na selecionada), grade de 12 ícones,
+  pré-visualização ao vivo da pílula; excluir (vermelho) com confirmação dizendo quantas contas ficarão sem categoria.
+
+## Ideias futuras (registradas)
+
+### Ícones das plataformas (pedido do Alexandre, para depois das categorias)
+Mostrar o símbolo de cada serviço (Discord, Epic Games, GitHub, Steam, Google...) no lugar da letra.
+- Ícones EMBUTIDOS no app (sem buscar na internet): buscar favicon online revelaria quais sites a pessoa usa e quebraria a
+  regra de nenhuma requisição externa. Base sugerida: Simple Icons (SVGs de marcas, licença CC0 para os arquivos; as marcas
+  continuam sendo dos donos, e o uso é só para identificar o serviço).
+- Associação pelo nome do serviço (normalizado: sem acentos/maiúsculas/espaços, com apelidos: "epic" → Epic Games) e,
+  no futuro, pelo domínio da URL da conta.
+- Desenhado em branco ou na cor oficial da marca sobre o ladrilho grafite; sem correspondência, continua o monograma com a cor da categoria.
+- Opção de escolher o ícone manualmente no formulário da conta.
