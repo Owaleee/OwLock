@@ -113,6 +113,13 @@ async function main() {
     await page.keyboard.press('Backspace');
     await waitRows(page, 6, 'busca limpa');
 
+    await page.click('#tab-attention');
+    await page.waitForFunction(() => document.querySelector('.segmented').dataset.index === '2');
+    await waitRows(page, 1, 'aba Atenção');
+    await page.click('#tab-all');
+    await waitRows(page, 6, 'aba Todas');
+    log('segmented control troca de aba (Atenção = 1 conta)');
+
     // (d) Discord com força fraca
     await clickRow(page, 'Discord');
     await page.waitForFunction(() => document.querySelector('#detail-name')?.textContent === 'Discord');
@@ -138,6 +145,8 @@ async function main() {
       || [...document.querySelectorAll('.toast')].some((t) => /transfer/.test(t.textContent)));
     const ring = await page.$('#copy-password .ow-count');
     log(ring ? 'Copiar senha mostra o anel de contagem' : 'Copiar senha sem área de transferência mostra aviso (ambiente sem xclip)');
+    await page.waitForSelector('.toast');
+    await shot(page, '09-toast');
 
     // (f) nova conta
     await page.click('#new-entry');
@@ -171,6 +180,7 @@ async function main() {
     await page.waitForSelector('#confirm-delete');
     const lead = await page.$eval('.modal .lead', (el) => el.textContent);
     if (!lead.includes('Conta E2E') || !lead.includes('não pode ser desfeita')) fail(`texto de exclusão inesperado: ${lead}`);
+    await shot(page, '10-modal-exclusao');
     await page.click('#confirm-delete');
     await waitRows(page, 6, 'depois de excluir');
     log('exclusão pede confirmação e remove a conta (volta a 6)');
@@ -200,6 +210,12 @@ async function main() {
     await page.click('#back');
     await page.waitForSelector('#new-entry');
     log('layout de celular: lista, detalhe e voltar');
+    await page.click('#new-entry');
+    await page.waitForSelector('#form-service');
+    await shot(page, '11-celular-sheet');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#form-service', { hidden: true });
+    log('celular: formulário abre como sheet e Esc fecha');
     await page.setViewport({ width: 1280, height: 800, isMobile: false, deviceScaleFactor: 1 });
     await page.waitForSelector('#nav-lock');
 

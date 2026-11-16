@@ -48,6 +48,20 @@ function h(tag, props = {}, ...children) {
   return el;
 }
 
+function logoImg(className, size) {
+  return h('img', { class: className, src: 'img/owlock-icon.png', alt: 'OwLock', width: String(size), height: String(size) });
+}
+
+function led(color = 'mint') {
+  return h('span', { class: `led ${color}`, 'aria-hidden': 'true' });
+}
+
+/* Cor de status pela força: 0-1 vermelho, 2 âmbar, 3-4 menta. */
+function strengthTone(score) {
+  if (score <= 1) return 'red';
+  return score === 2 ? 'amber' : 'mint';
+}
+
 function debounce(fn, wait) {
   let timer = null;
   return (...args) => {
@@ -112,8 +126,9 @@ function wipeState() {
    ====================================================================== */
 
 function toast(message, kind = 'ok') {
-  const el = h('div', { class: kind === 'warn' ? 'toast warn' : 'toast', text: message });
+  const el = h('div', { class: 'toast' }, led(kind === 'warn' ? 'red' : 'mint'), h('span', { text: message }));
   toastRoot.append(el);
+  setTimeout(() => el.classList.add('leaving'), 2500);
   setTimeout(() => el.remove(), 2800);
 }
 
@@ -193,6 +208,7 @@ function openModal(card, { dismissOnBackdrop = false } = {}) {
   const opener = document.activeElement;
   card.setAttribute('role', 'dialog');
   card.setAttribute('aria-modal', 'true');
+  card.prepend(h('div', { class: 'grabber', 'aria-hidden': 'true' }));
   const backdrop = h('div', { class: 'backdrop' }, card);
   if (dismissOnBackdrop) {
     backdrop.addEventListener('mousedown', (event) => {
@@ -250,7 +266,7 @@ function passwordField({ id, label, autofocus = false, placeholder = '' }) {
 
 function authHead(title, subtitle) {
   return h('div', { class: 'auth-head' },
-    h('div', { class: 'logo big' }, icon('lock', 26, 2.3)),
+    h('div', { class: 'logo-wrap' }, logoImg('auth-logo', 72)),
     h('h1', { text: title }),
     h('p', { text: subtitle }));
 }
@@ -392,7 +408,7 @@ function tick() {
   if (!state.unlocked) return;
   const left = secondsLeft();
   if (ui.timerText) ui.timerText.textContent = `Bloqueia em ${formatClock(left)}`;
-  if (ui.timer) ui.timer.classList.toggle('low', left <= 30);
+  if (ui.timer) ui.timer.className = `timer${left < 15 ? ' critical' : left < 60 ? ' low' : ''}`;
   if (left <= 0) lockNow('Cofre bloqueado por inatividade.');
 }
 
@@ -437,8 +453,8 @@ async function enterMain(status) {
   renderDetail({ first: true });
 }
 
-function railButton(id, iconName, label, onClick) {
-  return h('button', { class: 'btn rail-btn', id: `nav-${id}`, type: 'button', 'data-view': id, onClick },
+function railButton(id, iconName, label, onClick, extra = '') {
+  return h('button', { class: `btn rail-btn ${extra}`.trim(), id: `nav-${id}`, type: 'button', 'data-view': id, onClick },
     icon(iconName, 20), h('span', { text: label }));
 }
 
@@ -446,12 +462,12 @@ function buildShell() {
   ui.shell = h('div', { class: 'shell', 'data-view': 'vault', 'data-screen': 'list' });
 
   const rail = h('nav', { class: 'rail', 'aria-label': 'Navegação' },
-    h('div', { class: 'logo', 'aria-hidden': 'true' }, icon('lock', 20, 2.3)),
+    logoImg('rail-logo', 40),
     railButton('vault', 'vault', 'Cofre', () => setView('vault')),
     railButton('generator', 'generator', 'Gerador', () => setView('generator')),
     railButton('settings', 'sliders', 'Ajustes', () => setView('settings')),
     h('div', { class: 'rail-spacer' }),
-    railButton('lock', 'lock', 'Bloquear', () => lockNow('Cofre bloqueado.')));
+    railButton('lock', 'lock', 'Bloquear', () => lockNow('Cofre bloqueado.'), 'rail-lock'));
 
   ui.shell.append(rail, buildListColumn(), buildMain());
   root.replaceChildren(ui.shell);
@@ -460,15 +476,27 @@ function buildShell() {
 
 function buildListColumn() {
   ui.timerText = h('span', { id: 'timer-text', text: 'Bloqueia em --:--' });
-  ui.timer = h('span', { class: 'timer' }, h('span', { class: 'timer-dot ow-dot', 'aria-hidden': 'true' }), ui.timerText);
+  ui.timer = h('span', { class: 'timer' }, led('mint'), ui.timerText);
 
   ui.search = h('input', {
     id: 'search', type: 'text', placeholder: 'Buscar', 'aria-label': 'Buscar contas', autocomplete: 'off', spellcheck: 'false',
   });
-  ui.search.addEventListener('input', debounce(() => {
+  const runSearch = debounce(() => {
     state.query = ui.search.value.trim();
     loadEntries();
-  }, 150));
+  }, 150);
+  ui.searchClear = h('button', { class: 'btn search-clear', id: 'search-clear', type: 'button', hidden: true, 'aria-label': 'Limpar busca' }, icon('close', 11, 3));
+  ui.search.addEventListener('input', () => {
+    ui.searchClear.hidden = ui.search.value === '';
+    runSearch();
+  });
+  ui.searchClear.addEventListener('click', () => {
+    ui.search.value = '';
+    ui.searchClear.hidden = true;
+    state.query = '';
+    loadEntries();
+    ui.search.focus();
+  });
 
   ui.tabs = [['all', 'Todas'], ['2fa', 'Com 2FA'], ['attention', 'Atenção']].map(([id, label]) =>
     h('button', {
@@ -477,6 +505,8 @@ function buildListColumn() {
       onClick: () => setFilter(id),
     }, label));
 
+  ui.tabsBox = h('div', { class: 'segmented', role: 'tablist', 'aria-label': 'Filtro', 'data-index': '0' },
+    h('span', { class: 'seg-thumb', 'aria-hidden': 'true' }), ui.tabs);
   ui.statsMobile = h('div', { class: 'stats stats-mobile' });
   ui.rows = h('div', { class: 'rows', id: 'entry-list' });
 
@@ -486,8 +516,8 @@ function buildListColumn() {
   return h('section', { class: 'list-col', 'aria-label': 'Contas' },
     h('div', { class: 'list-head' }, h('h2', { text: 'Cofre' }), ui.timer),
     ui.statsMobile,
-    h('label', { class: 'search' }, icon('search', 16), ui.search),
-    h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Filtro' }, ui.tabs),
+    h('label', { class: 'search' }, icon('search', 16), ui.search, ui.searchClear),
+    ui.tabsBox,
     ui.rows,
     newButton);
 }
@@ -521,9 +551,14 @@ function setScreen(screen) {
   ui.shell.dataset.screen = screen;
 }
 
+function syncTabs() {
+  for (const tab of ui.tabs) tab.setAttribute('aria-selected', tab.dataset.filter === state.filter ? 'true' : 'false');
+  ui.tabsBox.dataset.index = String(Math.max(0, ['all', '2fa', 'attention'].indexOf(state.filter)));
+}
+
 function setFilter(filter) {
   state.filter = filter;
-  for (const tab of ui.tabs) tab.setAttribute('aria-selected', tab.dataset.filter === filter ? 'true' : 'false');
+  syncTabs();
   loadEntries();
 }
 
@@ -549,6 +584,7 @@ async function loadEntries() {
 
 function statCard(value, longLabel, shortLabel, tone, delay) {
   const card = h('div', { class: `stat ${tone}` },
+    led(tone === 'red' ? 'red' : 'mint'),
     h('b', { text: String(value) }),
     h('span', {}, h('span', { class: 'long', text: longLabel }), h('span', { class: 'short', text: shortLabel })));
   if (delay != null) {
@@ -563,7 +599,7 @@ function renderStats() {
   const build = (animated) => [
     statCard(total, plural(total, 'conta no cofre', 'contas no cofre'), plural(total, 'conta', 'contas'), '', animated ? 0 : null),
     statCard(withTwofa, 'com verificação em 2 etapas', 'com 2FA', 'mint', animated ? 60 : null),
-    statCard(attention, plural(attention, 'senha precisa de atenção', 'senhas precisam de atenção'), 'atenção', 'amber', animated ? 120 : null),
+    statCard(attention, plural(attention, 'senha precisa de atenção', 'senhas precisam de atenção'), 'atenção', attention > 0 ? 'red' : 'mint', animated ? 120 : null),
   ];
   const firstPaint = !ui.statsDesktop.firstChild;
   ui.statsDesktop.replaceChildren(...build(firstPaint));
@@ -593,7 +629,8 @@ function renderList() {
     return;
   }
   const rows = state.entries.map((entry, index) => {
-    const warn = entry.strength.score <= 2;
+    const score = entry.strength.score;
+    const warn = score <= 2;
     const row = h('button', {
       class: 'btn row' + (state.selected?.id === entry.id ? ' is-selected' : ''),
       type: 'button', 'data-id': entry.id,
@@ -603,7 +640,7 @@ function renderList() {
       h('span', { class: 'row-text' },
         h('span', { class: 'row-name', text: entry.service }),
         h('span', { class: 'row-user', text: entry.username || '' })),
-      h('span', { class: warn ? 'dot warn' : 'dot', role: 'img', 'aria-label': warn ? 'Precisa de atenção' : 'Segura' }));
+      h('span', { class: `led ${strengthTone(score)}`, role: 'img', 'aria-label': warn ? 'Precisa de atenção' : 'Segura' }));
     setDelay(row, Math.min(index, 12) * 55);
     return row;
   });
@@ -628,7 +665,7 @@ function selectEntry(id, openDetail = false) {
 
 function emptyDetail() {
   const none = state.stats.total === 0;
-  return h('div', { class: 'empty card ow-in', id: 'detail-empty' },
+  return h('div', { class: 'empty empty-card ow-in', id: 'detail-empty' },
     h('div', { class: 'empty-icon' }, icon('vault', 24)),
     h('h3', { text: none ? 'Nenhuma conta ainda' : 'Nenhuma conta selecionada' }),
     h('p', { text: none ? 'Crie a primeira conta para vê-la aqui.' : 'Escolha uma conta na lista para ver os detalhes e copiar a senha.' }));
@@ -657,17 +694,29 @@ function renderDetail({ first = false } = {}) {
   const copyButton = h('button', { class: 'btn btn-primary', id: 'copy-password', type: 'button', onClick: () => copyField(entry, 'password') });
   paintCopyButton(copyButton, entry.id);
 
-  const card = h('article', { class: 'card ow-in', 'aria-label': `Detalhes de ${entry.service}` },
-    h('button', { class: 'btn back-btn', id: 'back', type: 'button', onClick: () => setScreen('list') }, icon('back', 20, 2.2), 'Cofre'),
+  const infoRows = [
+    h('div', { class: 'group-row' },
+      h('span', { class: 'row-k', text: 'Login / e-mail' }),
+      h('span', { class: 'row-v', id: 'detail-username', text: entry.username || '—' })),
+    h('div', { class: 'group-row' },
+      h('span', { class: 'row-k', text: 'Verificação em 2 etapas' }),
+      h('span', { class: twofaOn ? 'row-v' : 'row-v warn', text: twofaText })),
+  ];
+  if (entry.notes) {
+    infoRows.push(h('div', { class: 'group-row stacked' },
+      h('span', { class: 'row-k', text: 'Notas' }),
+      h('span', { class: 'row-v', text: entry.notes })));
+  }
+
+  const card = h('article', { class: first ? 'detail ow-in' : 'detail ow-swap', 'aria-label': `Detalhes de ${entry.service}` },
+    h('button', { class: 'btn back-btn', id: 'back', type: 'button', onClick: () => setScreen('list') }, icon('back', 22, 2.2), 'Cofre'),
     h('header', { class: 'detail-head' },
       h('span', { class: 'mono-badge', 'aria-hidden': 'true', text: monogram(entry) }),
       h('div', { class: 'detail-title' },
         h('h1', { id: 'detail-name', text: entry.service }),
         h('span', { text: `Atualizada ${timeAgo(entry.updated_at)}`.trim() })),
       h('button', { class: 'btn btn-ghost small', id: 'edit-entry', type: 'button', onClick: () => openEntryForm(entry) }, 'Editar')),
-    h('div', { class: 'info-grid' },
-      h('div', { class: 'info' }, h('span', { class: 'k', text: 'Login / e-mail' }), h('span', { class: 'v', id: 'detail-username', text: entry.username || '—' })),
-      h('div', { class: 'info' }, h('span', { class: 'k', text: 'Verificação em duas etapas' }), h('span', { class: twofaOn ? 'v' : 'v warn', text: twofaText }))),
+    h('div', { class: 'group' }, infoRows),
     h('div', { class: 'pw-box' },
       h('div', { class: 'pw-head' }, h('span', { class: 'k', text: 'Senha' }), ui.revealButton),
       ui.pwText,
@@ -677,8 +726,7 @@ function renderDetail({ first = false } = {}) {
       h('div', { class: 'pw-actions' },
         copyButton,
         h('button', { class: 'btn btn-ghost', id: 'copy-username', type: 'button', onClick: () => copyField(entry, 'username') }, 'Copiar login'),
-        h('button', { class: 'btn btn-ghost danger', id: 'delete-entry', type: 'button', onClick: () => confirmDelete(entry) }, 'Excluir'))),
-    entry.notes ? h('div', { class: 'notes' }, h('span', { class: 'k', text: 'Notas' }), h('span', { class: 'v', text: entry.notes })) : null);
+        h('button', { class: 'btn btn-ghost danger', id: 'delete-entry', type: 'button', onClick: () => confirmDelete(entry) }, 'Excluir'))));
 
   if (first) setDelay(card, 140);
   ui.detail.append(card);
@@ -740,12 +788,12 @@ function paintCopyButton(button, id) {
     return;
   }
   const elapsed = (Date.now() - copied.startedAt) / 1000;
-  const progress = svg('circle', { class: 'ow-count', cx: 20, cy: 20, r: 18, fill: 'none', stroke: '#0B0C0F', 'stroke-width': 4, 'stroke-linecap': 'round' });
+  const progress = svg('circle', { class: 'ow-count', cx: 20, cy: 20, r: 18, fill: 'none', stroke: '#1FB894', 'stroke-width': 4, 'stroke-linecap': 'round' });
   progress.style.setProperty('animation-duration', `${copied.seconds}s`);
   progress.style.setProperty('animation-delay', `-${elapsed.toFixed(2)}s`);
   const ring = svg('svg', { class: 'ring', width: 22, height: 22, viewBox: '0 0 40 40', 'aria-hidden': 'true' });
   ring.append(
-    svg('circle', { cx: 20, cy: 20, r: 18, fill: 'none', stroke: 'rgba(11,12,15,.15)', 'stroke-width': 4 }),
+    svg('circle', { cx: 20, cy: 20, r: 18, fill: 'none', stroke: 'rgba(11,12,15,.14)', 'stroke-width': 4 }),
     progress);
   button.append(ring, `Copiada · limpa em ${copied.seconds} s`);
 }
@@ -779,10 +827,10 @@ async function copyField(entry, field) {
 
 function openEntryForm(entry) {
   const editing = Boolean(entry);
-  const serviceInput = h('input', { class: 'input', id: 'form-service', type: 'text', autocomplete: 'off', value: editing ? entry.service : '', 'data-autofocus': '' });
-  const userInput = h('input', { class: 'input', id: 'form-username', type: 'text', autocomplete: 'off', spellcheck: 'false', value: editing ? entry.username : '' });
+  const serviceInput = h('input', { class: 'row-input', id: 'form-service', type: 'text', autocomplete: 'off', value: editing ? entry.service : '', 'data-autofocus': '', placeholder: 'Obrigatório' });
+  const userInput = h('input', { class: 'row-input', id: 'form-username', type: 'text', autocomplete: 'off', spellcheck: 'false', value: editing ? entry.username : '' });
   const pwInput = h('input', {
-    id: 'form-password', type: 'password', autocomplete: 'new-password', spellcheck: 'false',
+    class: 'row-input', id: 'form-password', type: 'password', autocomplete: 'new-password', spellcheck: 'false',
     placeholder: editing ? 'Deixe em branco para manter a senha atual' : '',
   });
   const showButton = h('button', { class: 'btn btn-chip', id: 'form-toggle-password', type: 'button', 'aria-pressed': 'false', 'aria-label': 'Mostrar senha' }, 'Mostrar');
@@ -790,15 +838,15 @@ function openEntryForm(entry) {
   const meter = createMeter('form-strength');
   meter.clear(editing ? 'A senha atual será mantida.' : '');
 
-  const twofaBox = h('input', { type: 'checkbox', id: 'form-2fa', ...(editing && entry.has_2fa ? { checked: true } : {}) });
-  const twofaApp = h('input', { class: 'input', id: 'form-2fa-app', type: 'text', autocomplete: 'off', value: editing ? entry.twofa_app || '' : '', placeholder: 'Ex.: Google Authenticator' });
+  const twofaBox = h('input', { class: 'ios-switch', type: 'checkbox', role: 'switch', id: 'form-2fa', ...(editing && entry.has_2fa ? { checked: true } : {}) });
+  const twofaApp = h('input', { class: 'row-input', id: 'form-2fa-app', type: 'text', autocomplete: 'off', value: editing ? entry.twofa_app || '' : '', placeholder: 'Ex.: Google Authenticator' });
   const syncTwofa = () => {
     twofaApp.disabled = !twofaBox.checked;
   };
   twofaBox.addEventListener('change', syncTwofa);
   syncTwofa();
 
-  const notes = h('textarea', { class: 'input', id: 'form-notes', rows: '3', value: editing ? entry.notes || '' : '' });
+  const notes = h('textarea', { class: 'row-input', id: 'form-notes', rows: '3', value: editing ? entry.notes || '' : '' });
   const error = h('p', { class: 'msg error', id: 'form-error', role: 'alert' });
   const submit = h('button', { class: 'btn btn-primary', id: 'form-submit', type: 'submit' }, 'Salvar');
   const cancel = h('button', { class: 'btn btn-ghost', id: 'form-cancel', type: 'button', onClick: closeModal }, 'Cancelar');
@@ -842,15 +890,17 @@ function openEntryForm(entry) {
   });
 
   const form = h('form', { novalidate: '' },
-    h('div', { class: 'field' }, h('label', { for: 'form-service', text: 'Serviço *' }), serviceInput),
-    h('div', { class: 'field' }, h('label', { for: 'form-username', text: 'Login / e-mail' }), userInput),
-    h('div', { class: 'field' },
-      h('label', { for: 'form-password', text: 'Senha' }),
-      h('div', { class: 'input-wrap' }, pwInput, showButton, genButton),
-      meter.el),
-    h('label', { class: 'check' }, twofaBox, 'Esta conta usa verificação em duas etapas (2FA)'),
-    h('div', { class: 'field' }, h('label', { for: 'form-2fa-app', text: 'App autenticador' }), twofaApp),
-    h('div', { class: 'field' }, h('label', { for: 'form-notes', text: 'Notas' }), notes),
+    h('div', { class: 'group' },
+      h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'form-service', text: 'Serviço *' }), serviceInput),
+      h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'form-username', text: 'Login / e-mail' }), userInput)),
+    h('div', { class: 'group' },
+      h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'form-password', text: 'Senha' }), pwInput, showButton, genButton)),
+    h('div', { class: 'form-meter' }, meter.el),
+    h('div', { class: 'group' },
+      h('label', { class: 'group-row switch-row', for: 'form-2fa' }, h('span', { class: 'row-k grow', text: 'Verificação em duas etapas (2FA)' }), twofaBox),
+      h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'form-2fa-app', text: 'App autenticador' }), twofaApp)),
+    h('div', { class: 'group' },
+      h('div', { class: 'group-row stacked' }, h('label', { class: 'row-k', for: 'form-notes', text: 'Notas' }), notes)),
     error,
     h('div', { class: 'modal-actions' }, cancel, submit));
 
@@ -858,10 +908,10 @@ function openEntryForm(entry) {
     event.preventDefault();
     if (submit.disabled) return;
     error.textContent = '';
-    serviceInput.classList.remove('invalid');
+    serviceInput.parentElement.classList.remove('invalid');
     const service = serviceInput.value.trim();
     if (!service) {
-      serviceInput.classList.add('invalid');
+      serviceInput.parentElement.classList.add('invalid');
       error.textContent = 'Informe o nome do serviço.';
       serviceInput.focus();
       return;
@@ -904,7 +954,8 @@ async function afterSave(saved) {
   state.query = '';
   state.filter = 'all';
   ui.search.value = '';
-  for (const tab of ui.tabs) tab.setAttribute('aria-selected', tab.dataset.filter === 'all' ? 'true' : 'false');
+  ui.searchClear.hidden = true;
+  syncTabs();
   state.selected = saved;
   await loadEntries();
   state.copied = null;
@@ -989,12 +1040,12 @@ function buildGenerator() {
   });
 
   const toggle = (key, label, id) => {
-    const input = h('input', { type: 'checkbox', id, checked: true });
+    const input = h('input', { class: 'ios-switch', type: 'checkbox', role: 'switch', id, checked: true });
     input.addEventListener('change', () => {
       gen[key] = input.checked;
       generate();
     });
-    return h('label', { class: 'switch', for: id }, h('span', { text: label }), input);
+    return h('label', { class: 'group-row switch-row', for: id }, h('span', { class: 'row-k grow', text: label }), input);
   };
 
   const copyButton = h('button', { class: 'btn btn-ghost', id: 'gen-copy', type: 'button' }, icon('copy', 18, 2.2), 'Copiar');
@@ -1005,13 +1056,14 @@ function buildGenerator() {
     else if (r && r.error !== 'locked') toast((r && r.message) || 'Não foi possível copiar.', 'warn');
   });
 
-  const card = h('div', { class: 'card ow-in' },
+  const card = h('div', { class: 'gen-stack ow-in' },
     output,
     meter.el,
-    h('div', { class: 'range-row' },
-      h('div', { class: 'range-head' }, h('label', { for: 'gen-length', text: 'Tamanho' }), lengthLabel),
-      range),
-    h('div', { class: 'switches' },
+    h('div', { class: 'group' },
+      h('div', { class: 'group-row stacked' },
+        h('div', { class: 'range-head' }, h('label', { for: 'gen-length', text: 'Tamanho' }), lengthLabel),
+        range)),
+    h('div', { class: 'group' },
       toggle('upper', 'Letras maiúsculas', 'gen-upper'),
       toggle('lower', 'Letras minúsculas', 'gen-lower'),
       toggle('digits', 'Números', 'gen-digits'),
@@ -1023,7 +1075,7 @@ function buildGenerator() {
     h('p', { class: 'hint', text: 'A senha gerada aqui não é salva. Ao copiar, ela é apagada da área de transferência em 30 s.' }));
 
   ui.paneGen.replaceChildren(
-    h('div', { class: 'page-title' }, h('h1', { text: 'Gerador de senhas' }), h('p', { text: 'Crie senhas fortes e aleatórias.' })),
+    h('div', { class: 'page-title' }, h('h1', { text: 'Gerador' }), h('p', { text: 'Crie senhas fortes e aleatórias.' })),
     card);
   generate();
 }
@@ -1032,14 +1084,22 @@ function buildGenerator() {
    Ajustes
    ====================================================================== */
 
+function groupPasswordRow({ id, label, autofocus = false }) {
+  const input = h('input', { class: 'row-input', id, type: 'password', autocomplete: 'off', spellcheck: 'false', ...(autofocus ? { 'data-autofocus': '' } : {}) });
+  return { input, el: h('div', { class: 'group-row field-row' }, h('label', { class: 'row-k', for: id, text: label }), input) };
+}
+
 function buildSettings() {
-  const current = passwordField({ id: 'set-current', label: 'Senha mestra atual' });
-  const next = passwordField({ id: 'set-new', label: 'Nova senha mestra' });
-  const confirm = passwordField({ id: 'set-confirm', label: 'Confirmar nova senha mestra' });
+  const current = groupPasswordRow({ id: 'set-current', label: 'Senha atual' });
+  const next = groupPasswordRow({ id: 'set-new', label: 'Nova senha' });
+  const confirm = groupPasswordRow({ id: 'set-confirm', label: 'Confirmar nova senha' });
   const message = h('p', { class: 'msg', id: 'settings-msg', role: 'status' });
   const submit = h('button', { class: 'btn btn-primary', id: 'settings-submit', type: 'submit' }, 'Trocar senha mestra');
 
-  const form = h('form', { class: 'form-stack', novalidate: '' }, current.el, next.el, confirm.el, message, h('div', { class: 'btn-row' }, submit));
+  const form = h('form', { class: 'form-stack', novalidate: '' },
+    h('div', { class: 'group' }, current.el, next.el, confirm.el),
+    message,
+    h('div', { class: 'btn-row' }, submit));
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (submit.disabled) return;
@@ -1064,15 +1124,23 @@ function buildSettings() {
   const minutes = Math.round((state.status?.auto_lock_seconds || 300) / 60);
   ui.paneSettings.replaceChildren(
     h('div', { class: 'page-title' }, h('h1', { text: 'Ajustes' }), h('p', { text: 'Segurança e informações do cofre.' })),
-    h('div', { class: 'card ow-in' }, h('h2', { text: 'Trocar senha mestra' }), form),
-    h('div', { class: 'card ow-in' },
-      h('h2', { text: 'Cofre' }),
-      h('div', { class: 'field' }, h('span', { class: 'field-label', text: 'Arquivo do cofre' }), h('div', { class: 'kv-path', id: 'vault-path', text: state.status?.vault_path || '' }))),
-    h('div', { class: 'card ow-in' },
-      h('h2', { text: 'Proteção automática' }),
-      h('ul', { class: 'list-plain' },
-        h('li', { text: `O cofre bloqueia sozinho após ${minutes} ${plural(minutes, 'minuto', 'minutos')} sem uso.` }),
-        h('li', { text: 'A área de transferência é limpa 30 segundos depois de copiar uma senha ou login.' }))));
+    h('div', { class: 'settings-stack ow-in' }, h('h2', { class: 'group-title', text: 'Senha mestra' }), form),
+    h('div', { class: 'settings-stack ow-in' },
+      h('h2', { class: 'group-title', text: 'Cofre' }),
+      h('div', { class: 'group' },
+        h('div', { class: 'group-row stacked' },
+          h('span', { class: 'row-k', text: 'Arquivo do cofre' }),
+          h('span', { class: 'row-v path', id: 'vault-path', text: state.status?.vault_path || '' })))),
+    h('div', { class: 'settings-stack ow-in' },
+      h('h2', { class: 'group-title', text: 'Proteção automática' }),
+      h('div', { class: 'group' },
+        h('div', { class: 'group-row' },
+          h('span', { class: 'row-k grow', text: 'Bloqueio automático' }),
+          h('span', { class: 'row-v', text: `${minutes} ${plural(minutes, 'minuto', 'minutos')}` })),
+        h('div', { class: 'group-row' },
+          h('span', { class: 'row-k grow', text: 'Limpar área de transferência' }),
+          h('span', { class: 'row-v', text: '30 segundos' }))),
+      h('p', { class: 'hint', text: `O cofre bloqueia sozinho após ${minutes} ${plural(minutes, 'minuto', 'minutos')} sem uso, e a área de transferência é limpa 30 segundos depois de copiar uma senha ou login.` })));
   current.input.focus();
 }
 
