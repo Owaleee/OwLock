@@ -14,9 +14,9 @@ def main() -> None:
     parser.add_argument("--vault", type=Path, default=DEFAULT_VAULT_PATH, help="caminho do arquivo do cofre")
     args = parser.parse_args()
 
-    from owlock.gui.app import OwLockApp
+    from owlock.app.main import run
 
-    OwLockApp(vault_path=args.vault).mainloop()
+    run(args.vault)
 
 
 if __name__ == "__main__":

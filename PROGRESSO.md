@@ -101,3 +101,64 @@ MIN_MASTER_PASSWORD_LENGTH = 8                                  (em vault.py; cr
 ## Próximos passos
 - Modernizar o visual da interface.
 - App de celular lendo o mesmo formato de cofre.
+
+## Fase 2 — Interface nova (web dentro de janela nativa)
+
+Motivo: o CustomTkinter não faz degradê, desfoque nem animações suaves. A interface passa a ser HTML/CSS/JS
+numa janela nativa (pywebview; no Windows usa o WebView2 do Edge). O núcleo (`owlock/core`) não muda.
+O mesmo front-end poderá ser reaproveitado no app de celular.
+
+### Estrutura
+```
+owlock/
+  core/strength.py   # força da senha (0 a 4), sem dependências
+  app/api.py         # Api: única ponte entre a interface e o núcleo
+  app/main.py        # abre a janela pywebview com a Api
+  app/devserver.py   # SÓ desenvolvimento: serve a interface no navegador (127.0.0.1) com a mesma Api via HTTP
+  web/               # index.html, styles.css, app.js, bridge.js, fonts/
+```
+
+### Regras de segurança da interface
+- A interface nunca recebe senhas na listagem; só em `reveal_password` (ao clicar em Mostrar) e no formulário de edição.
+- Copiar acontece no Python (`copy_field`); a área de transferência é limpa em 30 s se ainda tiver o mesmo texto.
+- Nada de `innerHTML` com dados do usuário: textos sempre via `textContent` (evita XSS, que daria acesso ao cofre).
+- Content-Security-Policy restrita (`default-src 'self'`), fontes locais, nenhuma requisição para a internet.
+  Exceção necessária: `script-src` inclui `'unsafe-eval'` porque o pywebview cria as funções da ponte (`window.pywebview.api`)
+  com `new Function`. Scripts inline continuam proibidos, e a defesa contra XSS é não usar `innerHTML` com dados.
+- Bloqueio automático: a Api bloqueia sozinha após 5 min sem chamadas de atividade; a interface mostra a contagem.
+
+### Contrato da Api (`owlock/app/api.py`)
+Toda resposta é um dict JSON: sucesso `{"ok": true, ...}`; erro `{"ok": false, "error": "<código>", "message": "<texto pt-BR>"}`.
+Métodos que exigem cofre aberto devolvem `error: "locked"` quando bloqueado (inclusive por inatividade).
+
+```
+Api(vault_path: Path, auto_lock_seconds=300, clipboard=None, clock=time.monotonic, clear_after=30)
+  clipboard: objeto com copy(text) e paste() -> str (padrão: pyperclip); injetável nos testes.
+
+status() -> {ok, exists, unlocked, vault_path, auto_lock_seconds, seconds_left}   # não conta como atividade
+create_vault(password, confirm) -> ok | password_too_short | mismatch | exists
+unlock(password) -> ok | wrong_password | corrupted (message cita o caminho do .bak) | not_found
+lock() -> ok
+touch() -> {ok, seconds_left}                       # registra atividade
+list_entries(query="", filter="all") -> {ok, entries: [EntrySummary], stats: {total, with_2fa, attention}}
+    filter: "all" | "2fa" | "attention" (attention = strength.score <= 2); ordenado por service (casefold)
+    EntrySummary = {id, service, username, has_2fa, twofa_app, notes, created_at, updated_at,
+                    password_length, strength: {score, label}}            # SEM a senha
+get_entry(id) -> {ok, entry: EntrySummary} | not_found
+reveal_password(id) -> {ok, password} | not_found
+copy_field(id, field) -> {ok, clear_in: 30} | not_found | invalid_field     # field: "username" | "password"
+save_entry(data) -> {ok, entry: EntrySummary} | service_required | not_found | save_failed
+    data = {id?: str, service, username, password?: str|None, has_2fa, twofa_app, notes}
+    sem id = nova conta; com id = edição; em edição, password ausente/None mantém a senha atual
+delete_entry(id) -> ok | not_found | save_failed
+generate_password(length=20, upper=True, lower=True, digits=True, symbols=True) -> {ok, password, strength} | invalid_options
+check_strength(password) -> {ok, score, label}                            # não exige cofre aberto
+change_master_password(current, new, confirm) -> ok | wrong_password | password_too_short | mismatch | same_password
+copy_text(text) -> {ok, clear_in: 30} | invalid_text       # cópia avulsa (gerador), mesma limpeza automática
+shutdown() -> ok                                    # limpa a área de transferência se ainda tiver algo copiado pelo app; bloqueia
+```
+
+### Força da senha (`owlock/core/strength.py`)
+`password_strength(password: str) -> dict {score: 0..4, label}`; rótulos: 0 "Muito fraca", 1 "Fraca", 2 "Razoável", 3 "Boa", 4 "Forte".
+Heurística simples: comprimento, variedade de tipos de caractere, penalidade para sequências (123, abc, qwerty),
+anos (19xx/20xx), repetição e uma lista curta de senhas comuns.

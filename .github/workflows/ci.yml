@@ -19,11 +19,5 @@ jobs:
           python-version: "3.12"
       - name: Instalar dependências
         run: pip install -e ".[dev]"
-      - name: Testes (Linux, com tela virtual para a interface)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update -q && sudo apt-get install -y -q xvfb
-          xvfb-run -a pytest -v
-      - name: Testes (Windows)
-        if: runner.os == 'Windows'
+      - name: Testes
         run: pytest -v

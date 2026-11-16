@@ -2,18 +2,23 @@
 
 [![Testes](https://github.com/Owaleee/OwLock/actions/workflows/ci.yml/badge.svg)](https://github.com/Owaleee/OwLock/actions/workflows/ci.yml)
 
-Gerenciador de senhas local, offline e de código aberto, escrito em Python.
+Gerenciador de senhas local, offline e de código aberto, escrito em Python, com interface em HTML, CSS e JavaScript numa janela nativa.
 
 O OwLock guarda suas contas em um único arquivo criptografado, protegido por uma senha mestra. Nenhum dado sai do seu computador e o aplicativo não usa a rede.
 
 ## Funcionalidades
 
 - Cofre cifrado com senha mestra.
+- Interface escura, com animações, em janela nativa.
+- Layout que se adapta a telas pequenas.
+- Resumo do cofre: total de contas, quantas têm 2FA e quantas precisam de atenção.
 - Para cada conta: serviço, login ou e-mail, senha, se possui 2FA e qual aplicativo autenticador é usado, além de notas.
+- Medidor de força em cada senha e filtro **Atenção**, para ver as contas com senhas fracas ou razoáveis.
+- Senha revelada só sob demanda, pelo botão **Mostrar**.
 - Busca que não diferencia maiúsculas, minúsculas nem acentos, em serviço, login, aplicativo de 2FA e notas.
-- Gerador de senhas fortes.
+- Gerador de senhas fortes, com tamanho e tipos de caractere escolhidos por você.
 - Troca da senha mestra, que recifra o cofre com um novo salt.
-- Copiar senha para a área de transferência, com limpeza automática após 30 segundos.
+- Copiar login ou senha para a área de transferência, com contagem visual dos 30 segundos e limpeza automática depois disso.
 - Bloqueio automático após 5 minutos sem uso.
 - Backup automático (`.bak`) da versão anterior do arquivo e gravação atômica, que evita corromper o cofre se o programa for interrompido durante um salvamento.
 
@@ -21,13 +26,15 @@ O OwLock guarda suas contas em um único arquivo criptografado, protegido por um
 
 Baixe o `OwLock.exe` na página de [Releases](https://github.com/Owaleee/OwLock/releases) e abra. Não precisa instalar Python nem nada.
 
+O app usa o Microsoft Edge WebView2, que já vem instalado no Windows 10 e 11 atualizados.
+
 Como o executável não tem assinatura digital, o Windows SmartScreen pode mostrar um aviso na primeira vez: clique em **Mais informações** e depois em **Executar assim mesmo**. Se quiser conferir a integridade do download, compare o hash SHA-256 do arquivo com o `OwLock.exe.sha256` publicado na mesma release (`Get-FileHash OwLock.exe` no PowerShell).
 
 ## Executar a partir do código-fonte
 
 ### Windows
 
-1. Instale o Python 3.10 ou superior pelo site [python.org](https://www.python.org/downloads/). No instalador, marque a opção **Add to PATH** e mantenha o componente **tcl/tk** selecionado, pois a interface gráfica depende dele.
+1. Instale o Python 3.10 ou superior pelo site [python.org](https://www.python.org/downloads/). No instalador, marque a opção **Add to PATH**.
 2. Abra o terminal (PowerShell ou Prompt de Comando) e execute:
 
 ```bash
@@ -52,6 +59,8 @@ pip install -e .
 owlock
 ```
 
+No Linux, o pywebview precisa de um backend gráfico. Depois do `pip install -e .`, instale o backend Qt com `pip install "pywebview[qt]"` (ou o backend GTK, se preferir).
+
 Também é possível executar com `python -m owlock`.
 
 ### Escolhendo o arquivo do cofre
@@ -71,6 +80,16 @@ O OwLock foi projetado para que o conteúdo do arquivo do cofre só possa ser li
 - **Integridade:** o cabeçalho do arquivo (parâmetros de derivação e algoritmos) é usado como dado autenticado. Se alguém alterar esses parâmetros no arquivo, a abertura falha.
 - **Sem rede:** o OwLock não envia nem recebe dados. Tudo acontece localmente.
 - **Cofre em bloco único:** como o arquivo é cifrado inteiro, ele não revela quantas contas existem nem os nomes dos serviços.
+
+### Interface
+
+A interface roda numa janela do pywebview, e estas regras protegem os dados que ela exibe:
+
+- **Senhas fora da listagem:** a lista de contas nunca recebe senhas. A senha só chega à interface ao clicar em **Mostrar** (`reveal_password`) ou no formulário de edição.
+- **Cópia pelo Python:** a cópia é feita pelo Python (`copy_field`), que limpa a área de transferência após 30 segundos, somente se ela ainda contiver o texto copiado.
+- **Sem `innerHTML` com dados:** textos do usuário são sempre gravados com `textContent`, o que evita XSS, já que um ataque desse tipo daria acesso ao cofre.
+- **Content-Security-Policy restrita:** a política permite apenas recursos locais (`default-src 'self'`), fontes locais e nenhuma requisição para a internet. Scripts inline continuam proibidos. A exceção é `'unsafe-eval'` em `script-src`, exigida pelo pywebview, que cria as funções da ponte (`window.pywebview.api`) com `new Function`; por isso a defesa contra XSS depende de não usar `innerHTML` com dados.
+- **Bloqueio feito no Python:** a Api bloqueia o cofre sozinha após 5 minutos sem atividade. A interface apenas mostra a contagem.
 
 ### Limitações
 
@@ -106,21 +125,25 @@ O formato é versionado de propósito, para permitir que um aplicativo de celula
 
 ```
 owlock/
-  core/            # sem dependência de interface; reaproveitável numa API futura
+  __main__.py      # `owlock` ou `python -m owlock`: lê --vault e abre o aplicativo
+  core/            # sem dependência de interface; reaproveitável em outras interfaces
+    strength.py    # força da senha (0 a 4), sem dependências
     models.py      # Entry (dataclass)
     crypto.py      # derivação de chave (Argon2id) + AES-256-GCM
     vault.py       # Vault: criar, abrir, CRUD, salvar (escrita atômica), trocar senha mestra
     generator.py   # gerador de senhas com `secrets`
     errors.py      # WrongPasswordError, VaultCorruptedError, VaultExistsError
-  gui/
-    app.py         # CustomTkinter: desbloqueio, lista, formulários, troca de senha mestra
-  __main__.py      # `python -m owlock`
+  app/
+    api.py         # Api: única ponte entre a interface e o núcleo
+    main.py        # abre a janela pywebview com a Api
+    devserver.py   # SÓ desenvolvimento: serve a interface no navegador (127.0.0.1) com a mesma Api via HTTP
+  web/             # index.html, styles.css, app.js, bridge.js, fonts/
 packaging/         # ponto de entrada do executável (PyInstaller)
-tests/             # pytest: núcleo e teste de fumaça da interface
+tests/             # pytest: núcleo, Api, servidor de desenvolvimento e teste ponta a ponta (e2e)
 .github/workflows/ # CI (Linux e Windows) e geração do OwLock.exe nas releases
 ```
 
-O núcleo (`owlock/core`) não depende da interface gráfica. Isso permite reaproveitar a lógica de cofre em outras interfaces, como uma API ou um aplicativo móvel.
+O núcleo (`owlock/core`) não depende da interface. Isso permite reaproveitar a lógica de cofre em outras interfaces, como uma API ou um aplicativo móvel. A interface (HTML, CSS e JavaScript) só conversa com o núcleo pela classe `Api`, em `owlock/app/api.py`. O servidor de desenvolvimento usa essa mesma classe, então a interface se comporta igual no navegador e na janela nativa.
 
 ## Testes
 
@@ -131,14 +154,39 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Os testes da interface precisam de uma tela; no Linux sem ambiente gráfico, rode com `xvfb-run -a pytest`. O GitHub Actions executa a suíte no Linux e no Windows a cada push.
+O GitHub Actions executa a suíte no Linux e no Windows a cada push para a `main` e em pull requests.
+
+### Teste ponta a ponta da interface
+
+O teste de fumaça abre a interface no Chrome (headless) contra o servidor de desenvolvimento e confere o fluxo principal: desbloquear, listar, buscar, mostrar senha, criar e excluir conta, gerador, ajustes e layout de celular. As capturas de tela são salvas em `/tmp/owlock-shots/`.
+
+```bash
+# 1. dependências (uma vez)
+cd tests/e2e && npm i
+
+# 2. servidor de desenvolvimento com cofre de teste (na raiz do projeto)
+cd ../..
+rm -f /tmp/owlock-e2e.vault
+python -m owlock.app.devserver --vault /tmp/owlock-e2e.vault --seed --port 8765 &
+
+# 3. teste
+cd tests/e2e && node smoke.mjs
+```
+
+Variáveis opcionais: `OWLOCK_URL`, `CHROME_PATH` (padrão `/usr/bin/google-chrome`) e `OWLOCK_SHOTS`. O teste sai com código diferente de 0 se algo não aparecer. Encerre o servidor depois (`kill %1`).
+
+O servidor de desenvolvimento é só para desenvolvimento: ele escuta apenas em `127.0.0.1`, cria um cofre de teste com `--seed` e não deve ser usado com dados reais.
 
 ## Gerar o executável
 
 ```bash
-pip install pyinstaller
-pyinstaller --noconfirm --onefile --windowed --name OwLock --collect-data customtkinter --paths . packaging/run_owlock.py
+pip install "pyinstaller>=6"
+pyinstaller --noconfirm --onefile --windowed --name OwLock \
+  --add-data "owlock/web:owlock/web" --collect-all webview --paths . \
+  packaging/run_owlock.py
 ```
+
+No Windows, o `--add-data` usa `;` como separador: `--add-data "owlock/web;owlock/web"`, como no workflow de release.
 
 O arquivo fica em `dist/`. Para publicar uma nova versão, crie uma release no GitHub (aba **Releases** > **Draft a new release**, com uma tag como `v0.2.0`): o workflow gera o `OwLock.exe` no Windows e o anexa à release automaticamente.
 
@@ -150,7 +198,8 @@ Próximos passos previstos:
 - Sincronização entre dispositivos.
 - Geração de códigos TOTP.
 - Importação e exportação em CSV.
-- Interface com visual mais moderno.
+- Categorias para organizar as contas.
+- Formato de cofre v2 com Chave Secreta (para sincronizar com segurança entre computador e celular).
 
 ## Licença
 
