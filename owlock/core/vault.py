@@ -16,7 +16,7 @@ from cryptography.exceptions import InvalidTag
 
 from . import crypto
 from .errors import VaultCorruptedError, VaultExistsError, WrongPasswordError
-from .models import Entry
+from .models import Category, Entry
 
 DEFAULT_VAULT_PATH = Path.home() / ".owlock" / "owlock.vault"
 MIN_MASTER_PASSWORD_LENGTH = 8
@@ -73,6 +73,18 @@ def _check_master(password: str) -> None:
         )
 
 
+def default_categories() -> list[Category]:
+    """Categorias criadas em cofres novos e em cofres anteriores às categorias."""
+    return [
+        Category("Pessoal", "mint", "user"),
+        Category("Trabalho", "blue", "briefcase"),
+        Category("Jogos", "violet", "gamepad"),
+        Category("Redes sociais", "pink", "chat"),
+        Category("Financeiro", "amber", "card"),
+        Category("Streaming", "coral", "play"),
+    ]
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -87,9 +99,11 @@ class Vault:
         salt: bytes,
         kdf_params: dict[str, int],
         entries: list[Entry] | None = None,
+        categories: list[Category] | None = None,
     ) -> None:
         self.path = Path(path)
         self.entries: list[Entry] = entries if entries is not None else []
+        self.categories: list[Category] = categories if categories is not None else []
         self._key = key
         self._salt = salt
         self._kdf = dict(kdf_params)
@@ -111,7 +125,7 @@ class Vault:
         path.parent.mkdir(parents=True, exist_ok=True)
         salt = crypto.new_salt()
         key = crypto.derive_key(master_password, salt, **params)
-        vault = cls(path, key, salt, params)
+        vault = cls(path, key, salt, params, categories=default_categories())
         vault.save()
         return vault
 
@@ -151,9 +165,13 @@ class Vault:
         try:
             data = json.loads(plain.decode("utf-8"))
             entries = [Entry.from_dict(d) for d in data["entries"]]
+            if "categories" in data:
+                categories = [Category.from_dict(d) for d in data["categories"]]
+            else:
+                categories = default_categories()
         except (UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
             raise VaultCorruptedError("Conteúdo do cofre corrompido.") from exc
-        return cls(path, key, salt, params, entries)
+        return cls(path, key, salt, params, entries, categories)
 
     # ---- formato ----
     @staticmethod
@@ -180,7 +198,11 @@ class Vault:
         """Cifra e grava o cofre de forma atômica, mantendo um .bak."""
         header = self._header(self._salt, self._kdf)
         plain = json.dumps(
-            {"entries": [e.to_dict() for e in self.entries]}, ensure_ascii=False
+            {
+                "entries": [e.to_dict() for e in self.entries],
+                "categories": [c.to_dict() for c in self.categories],
+            },
+            ensure_ascii=False,
         ).encode("utf-8")
         nonce, ciphertext = crypto.encrypt(self._key, plain, self._aad(header))
         doc = json.loads(json.dumps(header))
@@ -251,6 +273,56 @@ class Vault:
         except BaseException:
             self.entries = previous
             raise
+
+    # ---- categorias ----
+    def _category_index(self, category_id: str) -> int:
+        for i, c in enumerate(self.categories):
+            if c.id == category_id:
+                return i
+        raise KeyError(category_id)
+
+    def add_category(self, category: Category) -> Category:
+        """Adiciona uma categoria e salva."""
+        previous = list(self.categories)
+        self.categories.append(category)
+        try:
+            self.save()
+        except BaseException:
+            self.categories = previous
+            raise
+        return category
+
+    def update_category(self, category: Category) -> Category:
+        """Atualiza a categoria pelo id e salva."""
+        i = self._category_index(category.id)
+        previous = list(self.categories)
+        self.categories[i] = category
+        try:
+            self.save()
+        except BaseException:
+            self.categories = previous
+            raise
+        return category
+
+    def delete_category(self, category_id: str) -> int:
+        """Remove a categoria (contas ficam sem categoria) e salva uma vez.
+
+        Devolve quantas contas ficaram sem categoria.
+        """
+        i = self._category_index(category_id)
+        previous = list(self.categories)
+        affected = [e for e in self.entries if e.category_id == category_id]
+        del self.categories[i]
+        for e in affected:
+            e.category_id = ""
+        try:
+            self.save()
+        except BaseException:
+            self.categories = previous
+            for e in affected:
+                e.category_id = category_id
+            raise
+        return len(affected)
 
     def search(self, text: str) -> list[Entry]:
         """Busca sem diferenciar maiúsculas/acentos (nunca na senha)."""

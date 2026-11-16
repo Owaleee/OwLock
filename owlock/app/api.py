@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from owlock.core import (
+    CATEGORY_COLORS,
+    CATEGORY_ICONS,
+    Category,
     Entry,
     MIN_MASTER_PASSWORD_LENGTH,
     Vault,
@@ -26,6 +29,8 @@ from owlock.core.strength import password_strength
 _FILTERS = ("all", "2fa", "attention")
 _FIELDS = ("username", "password")
 _ATTENTION_MAX_SCORE = 2
+_MAX_CATEGORY_NAME = 24
+_MAX_CATEGORIES = 30
 
 
 class _PyperclipClipboard:
@@ -119,7 +124,30 @@ class Api:
         return None
 
     @staticmethod
-    def _summary(entry: Entry) -> dict[str, Any]:
+    def _category_dict(category: Category) -> dict[str, Any]:
+        return {
+            "id": category.id,
+            "name": category.name,
+            "color": category.color,
+            "color_hex": CATEGORY_COLORS.get(category.color, CATEGORY_COLORS["gray"]),
+            "icon": category.icon,
+        }
+
+    def _category_summary(self, category: Category) -> dict[str, Any]:
+        assert self._vault is not None
+        out = self._category_dict(category)
+        out["count"] = sum(1 for e in self._vault.entries if e.category_id == category.id)
+        return out
+
+    def _find_category(self, category_id: Any) -> Category | None:
+        assert self._vault is not None
+        for category in self._vault.categories:
+            if category.id == category_id:
+                return category
+        return None
+
+    def _summary(self, entry: Entry) -> dict[str, Any]:
+        category = self._find_category(entry.category_id) if entry.category_id else None
         return {
             "id": entry.id,
             "service": entry.service,
@@ -131,6 +159,8 @@ class Api:
             "updated_at": entry.updated_at,
             "password_length": len(entry.password),
             "strength": password_strength(entry.password),
+            "category_id": entry.category_id if category is not None else "",
+            "category": self._category_dict(category) if category is not None else None,
         }
 
     def _find(self, entry_id: Any) -> Entry | None:
@@ -223,8 +253,10 @@ class Api:
             return {"ok": True, "seconds_left": self._seconds_left()}
 
     # ---- contas ----
-    def list_entries(self, query: str = "", filter: str = "all") -> dict[str, Any]:
-        """Lista contas (sem senhas), com busca e filtro."""
+    def list_entries(
+        self, query: str = "", filter: str = "all", category: str = ""
+    ) -> dict[str, Any]:
+        """Lista contas (sem senhas), com busca, filtro e categoria."""
         with self._lock:
             err = self._require()
             if err:
@@ -233,7 +265,11 @@ class Api:
                 return _error("invalid_filter", "Filtro inválido.")
             vault = self._vault
             assert vault is not None
+            category = category if isinstance(category, str) else ""
+            if category not in ("", "none") and self._find_category(category) is None:
+                return _error("invalid_category", "Categoria inválida.")
             everything = vault.entries
+            known = {c.id for c in vault.categories}
             stats = {
                 "total": len(everything),
                 "with_2fa": sum(1 for e in everything if e.has_2fa),
@@ -241,8 +277,13 @@ class Api:
                     1 for e in everything
                     if password_strength(e.password)["score"] <= _ATTENTION_MAX_SCORE
                 ),
+                "uncategorized": sum(1 for e in everything if e.category_id not in known),
             }
             found = vault.search(query if isinstance(query, str) else "")
+            if category == "none":
+                found = [e for e in found if e.category_id not in known]
+            elif category:
+                found = [e for e in found if e.category_id == category]
             if filter == "2fa":
                 found = [e for e in found if e.has_2fa]
             elif filter == "attention":
@@ -334,6 +375,11 @@ class Api:
                 "twofa_app": str(data.get("twofa_app") or "") if has_2fa else "",
                 "notes": str(data.get("notes") or ""),
             }
+            category_id = data.get("category_id")
+            category_id = category_id if isinstance(category_id, str) else ""
+            if category_id and self._find_category(category_id) is None:
+                return _error("invalid_category", "Categoria inválida.")
+            fields["category_id"] = category_id
             entry_id = data.get("id")
             try:
                 if not entry_id:
@@ -365,6 +411,94 @@ class Api:
             except OSError:
                 return _error("save_failed", "Não foi possível salvar o cofre.")
             return {"ok": True}
+
+    # ---- categorias ----
+    def list_categories(self) -> dict[str, Any]:
+        """Lista as categorias na ordem salva, com a contagem de contas."""
+        with self._lock:
+            err = self._require()
+            if err:
+                return err
+            assert self._vault is not None
+            return {
+                "ok": True,
+                "categories": [self._category_summary(c) for c in self._vault.categories],
+            }
+
+    def save_category(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Cria (sem id) ou edita (com id) uma categoria."""
+        with self._lock:
+            err = self._require()
+            if err:
+                return err
+            vault = self._vault
+            assert vault is not None
+            if not isinstance(data, dict):
+                return _error("name_required", "Informe o nome da categoria.")
+            name = str(data.get("name") or "").strip()
+            if not name:
+                return _error("name_required", "Informe o nome da categoria.")
+            if len(name) > _MAX_CATEGORY_NAME:
+                return _error(
+                    "name_too_long",
+                    f"O nome deve ter no máximo {_MAX_CATEGORY_NAME} caracteres.",
+                )
+            color, icon = data.get("color"), data.get("icon")
+            if not isinstance(color, str) or color not in CATEGORY_COLORS:
+                return _error("invalid_color", "Cor inválida.")
+            if not isinstance(icon, str) or icon not in CATEGORY_ICONS:
+                return _error("invalid_icon", "Ícone inválido.")
+            category_id = data.get("id")
+            current = None
+            if category_id:
+                current = self._find_category(category_id)
+                if current is None:
+                    return _error("not_found", "Categoria não encontrada.")
+            folded = name.casefold()
+            if any(
+                c.name.casefold() == folded and c is not current
+                for c in vault.categories
+            ):
+                return _error("name_exists", "Já existe uma categoria com esse nome.")
+            if current is None and len(vault.categories) >= _MAX_CATEGORIES:
+                return _error(
+                    "too_many", f"O limite é de {_MAX_CATEGORIES} categorias."
+                )
+            try:
+                if current is None:
+                    saved = vault.add_category(Category(name=name, color=color, icon=icon))
+                else:
+                    saved = vault.update_category(
+                        dataclasses.replace(current, name=name, color=color, icon=icon)
+                    )
+            except KeyError:
+                return _error("not_found", "Categoria não encontrada.")
+            except OSError:
+                return _error("save_failed", "Não foi possível salvar o cofre.")
+            return {"ok": True, "category": self._category_summary(saved)}
+
+    def delete_category(self, id: str) -> dict[str, Any]:
+        """Remove uma categoria; as contas dela ficam sem categoria."""
+        with self._lock:
+            err = self._require()
+            if err:
+                return err
+            assert self._vault is not None
+            try:
+                moved = self._vault.delete_category(id)
+            except KeyError:
+                return _error("not_found", "Categoria não encontrada.")
+            except OSError:
+                return _error("save_failed", "Não foi possível salvar o cofre.")
+            return {"ok": True, "moved": moved}
+
+    def category_options(self) -> dict[str, Any]:
+        """Cores e ícones disponíveis. Não exige cofre aberto."""
+        return {
+            "ok": True,
+            "colors": [{"key": k, "hex": h} for k, h in CATEGORY_COLORS.items()],
+            "icons": list(CATEGORY_ICONS),
+        }
 
     # ---- senhas ----
     def generate_password(

@@ -175,7 +175,8 @@ def test_filters_and_stats(opened):
     assert [e["service"] for e in r2["entries"]] == ["zeta", "Épico"]
     ra = opened.list_entries(filter="attention")
     assert [e["service"] for e in ra["entries"]] == ["beta", "zeta"]
-    assert ra["stats"] == {"total": 4, "with_2fa": 2, "attention": 2}
+    assert ra["stats"] == {"total": 4, "with_2fa": 2, "attention": 2,
+                        "uncategorized": 4}
     err(opened.list_entries(filter="xyz"), "invalid_filter")
 
 
@@ -410,6 +411,7 @@ def test_public_surface(api):
         "reveal_password", "copy_field",
         "copy_text", "save_entry", "delete_entry", "generate_password",
         "check_strength", "change_master_password", "shutdown",
+        "list_categories", "save_category", "delete_category", "category_options",
     }
 
 
@@ -426,3 +428,191 @@ def test_copy_text_clears_like_copy_field(opened, clip):
 
 def test_copy_text_requires_unlocked(api):
     assert api.copy_text("abc")["error"] == "locked"
+
+
+# ---- categorias ----
+def cat_ids(api):
+    return {c["name"]: c["id"] for c in api.list_categories()["categories"]}
+
+
+def test_list_categories_defaults_and_counts(opened):
+    r = opened.list_categories()
+    assert r["ok"]
+    assert [c["name"] for c in r["categories"]] == [
+        "Pessoal", "Trabalho", "Jogos", "Redes sociais", "Financeiro", "Streaming",
+    ]
+    first = r["categories"][0]
+    assert set(first) == {"id", "name", "color", "color_hex", "icon", "count"}
+    assert first["color"] == "mint" and first["color_hex"] == "#9FE3D3"
+    assert all(c["count"] == 0 for c in r["categories"])
+
+
+def test_save_category_create_and_edit(opened):
+    r = opened.save_category({"name": "  Estudos  ", "color": "lime", "icon": "school"})
+    assert r["ok"] and r["category"]["name"] == "Estudos" and r["category"]["count"] == 0
+    cid = r["category"]["id"]
+    assert opened.list_categories()["categories"][-1]["id"] == cid
+    r = opened.save_category({"id": cid, "name": "Estudos", "color": "pink", "icon": "code"})
+    assert r["ok"] and r["category"]["color"] == "pink" and r["category"]["icon"] == "code"
+    assert len(opened.list_categories()["categories"]) == 7
+
+
+def test_save_category_errors(opened):
+    ok = {"name": "Nova", "color": "mint", "icon": "star"}
+    err(opened.save_category({**ok, "name": "   "}), "name_required")
+    err(opened.save_category({**ok, "name": None}), "name_required")
+    err(opened.save_category("x"), "name_required")
+    err(opened.save_category({**ok, "name": "x" * 25}), "name_too_long")
+    assert opened.save_category({**ok, "name": "x" * 24})["ok"]
+    err(opened.save_category({**ok, "name": "jogos"}), "name_exists")
+    err(opened.save_category({**ok, "name": " PESSOAL "}), "name_exists")
+    err(opened.save_category({**ok, "color": "verde"}), "invalid_color")
+    err(opened.save_category({**ok, "color": None}), "invalid_color")
+    err(opened.save_category({**ok, "icon": "rocket"}), "invalid_icon")
+    err(opened.save_category({**ok, "icon": None}), "invalid_icon")
+    err(opened.save_category({**ok, "id": "nao-existe"}), "not_found")
+
+
+def test_save_category_edit_may_keep_own_name_but_not_clash(opened):
+    ids_ = cat_ids(opened)
+    r = opened.save_category(
+        {"id": ids_["Jogos"], "name": "JOGOS", "color": "gray", "icon": "gamepad"}
+    )
+    assert r["ok"] and r["category"]["name"] == "JOGOS"
+    err(opened.save_category(
+        {"id": ids_["Jogos"], "name": "trabalho", "color": "gray", "icon": "gamepad"}
+    ), "name_exists")
+
+
+def test_save_category_too_many(opened):
+    for i in range(30 - 6):
+        assert opened.save_category({"name": f"C{i}", "color": "gray", "icon": "star"})["ok"]
+    assert len(opened.list_categories()["categories"]) == 30
+    err(opened.save_category({"name": "Extra", "color": "gray", "icon": "star"}), "too_many")
+    # editar continua permitido no limite
+    cid = cat_ids(opened)["C0"]
+    assert opened.save_category({"id": cid, "name": "C0b", "color": "gray", "icon": "star"})["ok"]
+
+
+def test_delete_category_moves_entries(opened):
+    cid = cat_ids(opened)["Jogos"]
+    e = ids(opened)
+    for name in ("zeta", "Alfa"):
+        assert opened.save_entry({"id": e[name], "service": name, "category_id": cid})["ok"]
+    assert {c["name"]: c["count"] for c in opened.list_categories()["categories"]}["Jogos"] == 2
+    r = opened.delete_category(cid)
+    assert r == {"ok": True, "moved": 2}
+    assert "Jogos" not in cat_ids(opened)
+    assert opened.list_entries()["stats"]["uncategorized"] == 4
+    err(opened.delete_category(cid), "not_found")
+
+
+def test_category_save_failed(opened, monkeypatch):
+    cid = cat_ids(opened)["Jogos"]
+
+    def boom(self):
+        raise OSError("disco cheio")
+
+    monkeypatch.setattr(Vault, "save", boom)
+    err(opened.save_category({"name": "Nova", "color": "gray", "icon": "star"}), "save_failed")
+    err(opened.save_category(
+        {"id": cid, "name": "Outra", "color": "gray", "icon": "star"}), "save_failed")
+    err(opened.delete_category(cid), "save_failed")
+
+
+def _categorize(api):
+    c = cat_ids(api)
+    e = ids(api)
+    assign = {"zeta": "Jogos", "Alfa": "Jogos", "beta": "Trabalho"}
+    for name, cat in assign.items():
+        entry = api.get_entry(e[name])["entry"]
+        assert api.save_entry({"id": e[name], "service": entry["service"],
+                               "has_2fa": entry["has_2fa"], "twofa_app": entry["twofa_app"],
+                               "username": entry["username"], "notes": entry["notes"],
+                               "category_id": c[cat]})["ok"]
+    return c
+
+
+def test_list_entries_category_filters(opened):
+    c = _categorize(opened)
+    r = opened.list_entries(category=c["Jogos"])
+    assert [x["service"] for x in r["entries"]] == ["Alfa", "zeta"]
+    assert r["stats"]["total"] == 4 and r["stats"]["uncategorized"] == 1
+    r = opened.list_entries(category="none")
+    assert [x["service"] for x in r["entries"]] == ["Épico"]
+    assert len(opened.list_entries(category="")["entries"]) == 4
+    err(opened.list_entries(category="nao-existe"), "invalid_category")
+
+
+def test_category_combines_with_filter_and_query(opened):
+    c = _categorize(opened)
+    # zeta tem 2FA; Alfa não
+    r = opened.list_entries(filter="2fa", category=c["Jogos"])
+    assert [x["service"] for x in r["entries"]] == ["zeta"]
+    r = opened.list_entries(query="nota um", filter="2fa", category=c["Jogos"])
+    assert [x["service"] for x in r["entries"]] == ["zeta"]
+    r = opened.list_entries(query="alfa", filter="2fa", category=c["Jogos"])
+    assert r["entries"] == []
+    r = opened.list_entries(query="alfa", category=c["Trabalho"])
+    assert r["entries"] == []
+    r = opened.list_entries(filter="2fa", category="none")
+    assert [x["service"] for x in r["entries"]] == ["Épico"]
+    # stats não dependem dos filtros
+    assert r["stats"]["total"] == 4
+
+
+def test_entry_summary_category(opened):
+    c = _categorize(opened)
+    e = ids(opened)
+    s = opened.get_entry(e["zeta"])["entry"]
+    assert s["category_id"] == c["Jogos"]
+    assert s["category"] == {
+        "id": c["Jogos"], "name": "Jogos", "color": "violet",
+        "color_hex": "#B69CFF", "icon": "gamepad",
+    }
+    none = opened.get_entry(e["Épico"])["entry"]
+    assert none["category_id"] == "" and none["category"] is None
+
+
+def test_summary_with_dangling_category_is_none(opened, path):
+    e = ids(opened)
+    opened._vault.entries[0].category_id = "id-que-sumiu"
+    s = opened.get_entry(opened._vault.entries[0].id)["entry"]
+    assert s["category"] is None and s["category_id"] == ""
+    assert opened.list_entries()["stats"]["uncategorized"] == 4
+    assert len(opened.list_entries(category="none")["entries"]) == 4
+    assert e  # usado só para garantir que a listagem funciona
+
+
+def test_save_entry_category(opened):
+    cid = cat_ids(opened)["Streaming"]
+    r = opened.save_entry({"service": "Nova", "category_id": cid})
+    assert r["ok"] and r["entry"]["category"]["name"] == "Streaming"
+    err(opened.save_entry({"service": "Outra", "category_id": "nao-existe"}), "invalid_category")
+    # edição sem category_id remove a categoria; "" também
+    eid = r["entry"]["id"]
+    r = opened.save_entry({"id": eid, "service": "Nova", "category_id": ""})
+    assert r["entry"]["category_id"] == "" and r["entry"]["category"] is None
+    err(opened.save_entry({"id": eid, "service": "Nova", "category_id": "x"}), "invalid_category")
+    assert opened.get_entry(eid)["entry"]["category_id"] == ""
+
+
+def test_category_options_without_vault(api):
+    r = api.category_options()
+    assert r["ok"]
+    assert r["colors"][0] == {"key": "mint", "hex": "#9FE3D3"}
+    assert [c["key"] for c in r["colors"]] == [
+        "mint", "blue", "violet", "pink", "amber", "coral", "lime", "gray"
+    ]
+    assert r["icons"][0] == "user" and len(r["icons"]) == 12
+
+
+def test_category_methods_require_unlocked(api):
+    err(api.list_categories(), "locked")
+    err(api.save_category({"name": "X", "color": "mint", "icon": "user"}), "locked")
+    err(api.delete_category("abc"), "locked")
+
+
+def test_category_methods_locked_after_inactivity(opened, clock):
+    clock.advance(301)
+    err(opened.list_categories(), "locked")

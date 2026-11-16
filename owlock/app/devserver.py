@@ -129,13 +129,14 @@ def make_server(api: Api, port: int = 8765, web_dir: Path | None = None) -> Thre
 def seed_vault(path: Path) -> None:
     """Cria um cofre de teste com contas de exemplo."""
     vault = Vault.create(path, SEED_PASSWORD)
+    cats = {c.name: c.id for c in vault.categories}
     samples = [
-        Entry("Google", "seu.email@gmail.com", "Gx4!nP8s#Qd1vL2@", True, "Google Authenticator", "Conta principal"),
-        Entry("Steam", "seu_usuario_steam", "T7#qLm9!vRz2@kWp", True, "Steam Guard"),
-        Entry("GitHub", "seu-usuario", "Hk3$wTz9&pLq5!mB", True, "Authy", "Chave de acesso do trabalho"),
-        Entry("Discord", "seu.email@gmail.com", "discord2021", False, "", "Trocar esta senha"),
-        Entry("Netflix", "seu.email@gmail.com", "Nf!93kdPq", False),
-        Entry("Epic Games", "seu.email@gmail.com", "Zr8@cVn4#Yt6mJ1x", True, "Epic Authenticator"),
+        Entry("Google", "seu.email@gmail.com", "Gx4!nP8s#Qd1vL2@", True, "Google Authenticator", "Conta principal", cats["Pessoal"]),
+        Entry("Steam", "seu_usuario_steam", "T7#qLm9!vRz2@kWp", True, "Steam Guard", "", cats["Jogos"]),
+        Entry("GitHub", "seu-usuario", "Hk3$wTz9&pLq5!mB", True, "Authy", "Chave de acesso do trabalho", cats["Trabalho"]),
+        Entry("Discord", "seu.email@gmail.com", "discord2021", False, "", "Trocar esta senha", cats["Jogos"]),
+        Entry("Netflix", "seu.email@gmail.com", "Nf!93kdPq", False, category_id=cats["Streaming"]),
+        Entry("Epic Games", "seu.email@gmail.com", "Zr8@cVn4#Yt6mJ1x", True, "Epic Authenticator", "", cats["Jogos"]),
     ]
     for entry in samples:
         vault.add(entry)
