@@ -31,5 +31,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          sha256sum dist/OwLock.exe | tee dist/OwLock.exe.sha256
+          (cd dist && sha256sum OwLock.exe | tee OwLock.exe.sha256)
           gh release upload "$GITHUB_REF_NAME" dist/OwLock.exe dist/OwLock.exe.sha256 --clobber
