@@ -1,7 +1,7 @@
 import pytest
 
-from cofre.core import generate_password
-from cofre.core.generator import SYMBOLS
+from owlock.core import generate_password
+from owlock.core.generator import SYMBOLS
 import string
 
 

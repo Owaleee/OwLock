@@ -1,4 +1,4 @@
-"""Interface gráfica do Cofre (CustomTkinter)."""
+"""Interface gráfica do OwLock (CustomTkinter)."""
 
 from __future__ import annotations
 
@@ -12,10 +12,10 @@ from typing import Callable
 
 import customtkinter as ctk
 
-from cofre.core.errors import VaultCorruptedError, VaultExistsError, WrongPasswordError
-from cofre.core.generator import generate_password
-from cofre.core.models import Entry
-from cofre.core.vault import DEFAULT_VAULT_PATH, MIN_MASTER_PASSWORD_LENGTH, Vault
+from owlock.core.errors import VaultCorruptedError, VaultExistsError, WrongPasswordError
+from owlock.core.generator import generate_password
+from owlock.core.models import Entry
+from owlock.core.vault import DEFAULT_VAULT_PATH, MIN_MASTER_PASSWORD_LENGTH, Vault
 
 AUTO_LOCK_MS = 5 * 60 * 1000
 CLIPBOARD_CLEAR_MS = 30 * 1000
@@ -25,7 +25,7 @@ ERROR_COLOR = "#ff5555"
 class UnlockFrame(ctk.CTkFrame):
     """Tela de desbloqueio ou de criação do cofre."""
 
-    def __init__(self, app: "CofreApp") -> None:
+    def __init__(self, app: "OwLockApp") -> None:
         super().__init__(app, fg_color="transparent")
         self.app = app
         self.creating = not app.vault_path.exists()
@@ -35,7 +35,7 @@ class UnlockFrame(ctk.CTkFrame):
         box.place(relx=0.5, rely=0.5, anchor="center")
         pad = {"padx": 30}
 
-        ctk.CTkLabel(box, text="Cofre", font=ctk.CTkFont(size=28, weight="bold")).pack(pady=(30, 5), **pad)
+        ctk.CTkLabel(box, text="OwLock", font=ctk.CTkFont(size=28, weight="bold")).pack(pady=(30, 5), **pad)
         subtitle = "Criar cofre" if self.creating else "Desbloquear"
         ctk.CTkLabel(box, text=subtitle, font=ctk.CTkFont(size=16)).pack(pady=(0, 15), **pad)
 
@@ -139,7 +139,7 @@ class UnlockFrame(ctk.CTkFrame):
 class EntryDialog(ctk.CTkToplevel):
     """Formulário modal para criar ou editar uma conta."""
 
-    def __init__(self, app: "CofreApp", entry: Entry | None, on_save: Callable[[Entry], None]) -> None:
+    def __init__(self, app: "OwLockApp", entry: Entry | None, on_save: Callable[[Entry], None]) -> None:
         super().__init__(app)
         self.entry = entry
         self.on_save = on_save
@@ -248,7 +248,7 @@ class EntryDialog(ctk.CTkToplevel):
 class ChangePasswordDialog(ctk.CTkToplevel):
     """Formulário modal para trocar a senha mestra."""
 
-    def __init__(self, app: "CofreApp", vault: Vault) -> None:
+    def __init__(self, app: "OwLockApp", vault: Vault) -> None:
         super().__init__(app)
         self.app = app
         self.vault = vault
@@ -332,7 +332,7 @@ class ChangePasswordDialog(ctk.CTkToplevel):
 class MainFrame(ctk.CTkFrame):
     """Tela principal: busca e lista de contas."""
 
-    def __init__(self, app: "CofreApp") -> None:
+    def __init__(self, app: "OwLockApp") -> None:
         super().__init__(app, fg_color="transparent")
         self.app = app
         bar = ctk.CTkFrame(self, fg_color="transparent")
@@ -405,13 +405,13 @@ class MainFrame(ctk.CTkFrame):
         ).pack(side="left", padx=2)
 
 
-class CofreApp(ctk.CTk):
+class OwLockApp(ctk.CTk):
     """Janela principal do aplicativo."""
 
     def __init__(self, vault_path: Path = DEFAULT_VAULT_PATH) -> None:
         ctk.set_appearance_mode("dark")
         super().__init__()
-        self.title("Cofre")
+        self.title("OwLock")
         self.geometry("900x600")
         self.minsize(700, 450)
         self.vault_path = Path(vault_path)

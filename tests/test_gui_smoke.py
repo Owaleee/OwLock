@@ -8,9 +8,9 @@ pytest.importorskip("tkinter")
 if not os.environ.get("DISPLAY"):
     pytest.skip("sem DISPLAY", allow_module_level=True)
 
-from cofre.core.models import Entry
-from cofre.core.vault import Vault
-from cofre.gui.app import CofreApp, MainFrame, UnlockFrame
+from owlock.core.models import Entry
+from owlock.core.vault import Vault
+from owlock.gui.app import OwLockApp, MainFrame, UnlockFrame
 
 KDF = {"time_cost": 1, "memory_cost": 8192, "parallelism": 1}
 
@@ -21,7 +21,7 @@ def test_unlock_and_list(tmp_path):
     vault.add(Entry(service="GitHub", username="a@b.c", has_2fa=True, twofa_app="Authy"))
     vault.add(Entry(service="amazon"))
 
-    app = CofreApp(vault_path=path)
+    app = OwLockApp(vault_path=path)
     try:
         app.update()
         assert isinstance(app.frame, UnlockFrame)
@@ -49,13 +49,13 @@ def _pump(app, dialog, seconds=5.0):
 
 
 def test_change_master_password(tmp_path):
-    from cofre.core.errors import WrongPasswordError
-    from cofre.gui.app import ChangePasswordDialog
+    from owlock.core.errors import WrongPasswordError
+    from owlock.gui.app import ChangePasswordDialog
 
     path = tmp_path / "t.vault"
     Vault.create(path, "senha-antiga-1", kdf_params=KDF).add(Entry(service="Steam"))
 
-    app = CofreApp(vault_path=path)
+    app = OwLockApp(vault_path=path)
     try:
         app._unlock_sync("senha-antiga-1")
         app.change_master_password()

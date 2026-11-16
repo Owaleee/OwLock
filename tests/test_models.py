@@ -1,6 +1,6 @@
 import pytest
 
-from cofre.core import Entry
+from owlock.core import Entry
 
 
 def test_defaults_and_roundtrip():

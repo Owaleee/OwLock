@@ -18,10 +18,10 @@ from . import crypto
 from .errors import VaultCorruptedError, VaultExistsError, WrongPasswordError
 from .models import Entry
 
-DEFAULT_VAULT_PATH = Path.home() / ".cofre" / "cofre.vault"
+DEFAULT_VAULT_PATH = Path.home() / ".owlock" / "owlock.vault"
 MIN_MASTER_PASSWORD_LENGTH = 8
 
-FORMAT_NAME = "cofre-vault"
+FORMAT_NAME = "owlock-vault"
 FORMAT_VERSION = 1
 KDF_NAME = "argon2id"
 CIPHER_NAME = "aes-256-gcm"

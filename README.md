@@ -1,10 +1,10 @@
-# Cofre
+# OwLock
 
-[![Testes](https://github.com/Owaleee/cofre/actions/workflows/ci.yml/badge.svg)](https://github.com/Owaleee/cofre/actions/workflows/ci.yml)
+[![Testes](https://github.com/Owaleee/OwLock/actions/workflows/ci.yml/badge.svg)](https://github.com/Owaleee/OwLock/actions/workflows/ci.yml)
 
 Gerenciador de senhas local, offline e de código aberto, escrito em Python.
 
-O Cofre guarda suas contas em um único arquivo criptografado, protegido por uma senha mestra. Nenhum dado sai do seu computador e o aplicativo não usa a rede.
+O OwLock guarda suas contas em um único arquivo criptografado, protegido por uma senha mestra. Nenhum dado sai do seu computador e o aplicativo não usa a rede.
 
 ## Funcionalidades
 
@@ -19,9 +19,9 @@ O Cofre guarda suas contas em um único arquivo criptografado, protegido por uma
 
 ## Download (Windows)
 
-Baixe o `Cofre.exe` na página de [Releases](https://github.com/Owaleee/cofre/releases) e abra. Não precisa instalar Python nem nada.
+Baixe o `OwLock.exe` na página de [Releases](https://github.com/Owaleee/OwLock/releases) e abra. Não precisa instalar Python nem nada.
 
-Como o executável não tem assinatura digital, o Windows SmartScreen pode mostrar um aviso na primeira vez: clique em **Mais informações** e depois em **Executar assim mesmo**. Se quiser conferir a integridade do download, compare o hash SHA-256 do arquivo com o `Cofre.exe.sha256` publicado na mesma release (`Get-FileHash Cofre.exe` no PowerShell).
+Como o executável não tem assinatura digital, o Windows SmartScreen pode mostrar um aviso na primeira vez: clique em **Mais informações** e depois em **Executar assim mesmo**. Se quiser conferir a integridade do download, compare o hash SHA-256 do arquivo com o `OwLock.exe.sha256` publicado na mesma release (`Get-FileHash OwLock.exe` no PowerShell).
 
 ## Executar a partir do código-fonte
 
@@ -31,12 +31,12 @@ Como o executável não tem assinatura digital, o Windows SmartScreen pode mostr
 2. Abra o terminal (PowerShell ou Prompt de Comando) e execute:
 
 ```bash
-git clone https://github.com/Owaleee/cofre.git
-cd cofre
+git clone https://github.com/Owaleee/OwLock.git
+cd OwLock
 python -m venv .venv
 .venv\Scripts\activate
 pip install -e .
-cofre
+owlock
 ```
 
 ### Linux e macOS
@@ -44,32 +44,32 @@ cofre
 Requer Python 3.10 ou superior.
 
 ```bash
-git clone https://github.com/Owaleee/cofre.git
-cd cofre
+git clone https://github.com/Owaleee/OwLock.git
+cd OwLock
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .
-cofre
+owlock
 ```
 
-Também é possível executar com `python -m cofre`.
+Também é possível executar com `python -m owlock`.
 
 ### Escolhendo o arquivo do cofre
 
-Por padrão, o cofre fica na pasta `.cofre` dentro da pasta do seu usuário, no arquivo `cofre.vault`. Para usar outro arquivo, informe o caminho com a opção `--vault`:
+Por padrão, o cofre fica na pasta `.owlock` dentro da pasta do seu usuário, no arquivo `owlock.vault`. Para usar outro arquivo, informe o caminho com a opção `--vault`:
 
 ```bash
-cofre --vault CAMINHO/do/meu-cofre.vault
+owlock --vault CAMINHO/do/meu-cofre.vault
 ```
 
 ## Segurança
 
-O Cofre foi projetado para que o conteúdo do arquivo do cofre só possa ser lido com a senha mestra.
+O OwLock foi projetado para que o conteúdo do arquivo do cofre só possa ser lido com a senha mestra.
 
 - **Derivação da chave:** a senha mestra é transformada em uma chave de 256 bits pelo algoritmo Argon2id, configurado com 3 iterações, 64 MiB de memória e paralelismo 4. Cada cofre usa um salt aleatório de 16 bytes. Esse processo torna ataques de força bruta muito mais caros.
 - **Cifragem:** o conteúdo inteiro do cofre é cifrado com AES-256-GCM. Um nonce novo é gerado a cada gravação.
 - **Integridade:** o cabeçalho do arquivo (parâmetros de derivação e algoritmos) é usado como dado autenticado. Se alguém alterar esses parâmetros no arquivo, a abertura falha.
-- **Sem rede:** o Cofre não envia nem recebe dados. Tudo acontece localmente.
+- **Sem rede:** o OwLock não envia nem recebe dados. Tudo acontece localmente.
 - **Cofre em bloco único:** como o arquivo é cifrado inteiro, ele não revela quantas contas existem nem os nomes dos serviços.
 
 ### Limitações
@@ -92,7 +92,7 @@ O cofre é salvo em JSON, com número de versão. A estrutura é esta:
 
 ```json
 {
-  "format": "cofre-vault",
+  "format": "owlock-vault",
   "version": 1,
   "kdf": {"name": "argon2id", "salt": "<b64>", "time_cost": 3, "memory_cost": 65536, "parallelism": 4},
   "cipher": {"name": "aes-256-gcm", "nonce": "<b64 12 bytes>"},
@@ -105,7 +105,7 @@ O formato é versionado de propósito, para permitir que um aplicativo de celula
 ## Arquitetura
 
 ```
-cofre/
+owlock/
   core/            # sem dependência de interface; reaproveitável numa API futura
     models.py      # Entry (dataclass)
     crypto.py      # derivação de chave (Argon2id) + AES-256-GCM
@@ -114,13 +114,13 @@ cofre/
     errors.py      # WrongPasswordError, VaultCorruptedError, VaultExistsError
   gui/
     app.py         # CustomTkinter: desbloqueio, lista, formulários, troca de senha mestra
-  __main__.py      # `python -m cofre`
+  __main__.py      # `python -m owlock`
 packaging/         # ponto de entrada do executável (PyInstaller)
 tests/             # pytest: núcleo e teste de fumaça da interface
-.github/workflows/ # CI (Linux e Windows) e geração do Cofre.exe nas releases
+.github/workflows/ # CI (Linux e Windows) e geração do OwLock.exe nas releases
 ```
 
-O núcleo (`cofre/core`) não depende da interface gráfica. Isso permite reaproveitar a lógica de cofre em outras interfaces, como uma API ou um aplicativo móvel.
+O núcleo (`owlock/core`) não depende da interface gráfica. Isso permite reaproveitar a lógica de cofre em outras interfaces, como uma API ou um aplicativo móvel.
 
 ## Testes
 
@@ -137,10 +137,10 @@ Os testes da interface precisam de uma tela; no Linux sem ambiente gráfico, rod
 
 ```bash
 pip install pyinstaller
-pyinstaller --noconfirm --onefile --windowed --name Cofre --collect-data customtkinter --paths . packaging/run_cofre.py
+pyinstaller --noconfirm --onefile --windowed --name OwLock --collect-data customtkinter --paths . packaging/run_owlock.py
 ```
 
-O arquivo fica em `dist/`. Para publicar uma nova versão no GitHub, crie e envie uma tag (`git tag v0.2.0 && git push origin v0.2.0`): o workflow de release gera o `Cofre.exe` no Windows e o anexa à release.
+O arquivo fica em `dist/`. Para publicar uma nova versão no GitHub, crie e envie uma tag (`git tag v0.2.0 && git push origin v0.2.0`): o workflow de release gera o `OwLock.exe` no Windows e o anexa à release.
 
 ## Roteiro
 

@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from cofre.core import (
+from owlock.core import (
     Entry, Vault, VaultCorruptedError, VaultExistsError, WrongPasswordError,
 )
 
@@ -83,7 +83,7 @@ def test_unknown_version(path, vault):
 
 
 def test_absurd_memory_cost_rejected_without_deriving(path, vault, monkeypatch):
-    from cofre.core import crypto
+    from owlock.core import crypto
 
     def boom(*a, **k):
         raise AssertionError("não deveria derivar")
@@ -110,7 +110,7 @@ def test_missing_fields_and_bad_base64(path, vault):
 
 def _doc_with_bad_b64(path):
     return {
-        "format": "cofre-vault", "version": 1,
+        "format": "owlock-vault", "version": 1,
         "kdf": {"name": "argon2id", "salt": "!!!", **FAST},
         "cipher": {"name": "aes-256-gcm", "nonce": "AAAA"},
         "ciphertext": "AAAA",
@@ -202,7 +202,7 @@ def test_backup_after_second_save(path, vault):
 
 
 def _fail_replace(monkeypatch):
-    from cofre.core import vault as vault_mod
+    from owlock.core import vault as vault_mod
 
     def boom(*a, **k):
         raise OSError("disco cheio")

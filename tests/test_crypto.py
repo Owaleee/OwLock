@@ -1,7 +1,7 @@
 import pytest
 from cryptography.exceptions import InvalidTag
 
-from cofre.core import crypto
+from owlock.core import crypto
 
 FAST = {"time_cost": 1, "memory_cost": 8192, "parallelism": 1}
 

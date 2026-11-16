@@ -1,4 +1,4 @@
-# Cofre — gerenciador de senhas local
+# OwLock — gerenciador de senhas local
 
 ## Objetivo
 App desktop local, de código aberto, onde o usuário guarda contas (serviço, login/e-mail, senha,
@@ -16,7 +16,7 @@ se tem 2FA e qual app autenticador, notas) num arquivo criptografado protegido p
 
 ## Arquitetura
 ```
-cofre/
+owlock/
   core/            # sem dependência de interface; reaproveitável numa API futura
     models.py      # Entry (dataclass)
     crypto.py      # derivação de chave (Argon2id) + AES-256-GCM
@@ -25,13 +25,13 @@ cofre/
     errors.py      # WrongPasswordError, VaultCorruptedError, VaultExistsError
   gui/
     app.py         # CustomTkinter: telas de desbloqueio, lista, formulário
-  __main__.py      # `python -m cofre`
+  __main__.py      # `python -m owlock`
 tests/             # pytest do núcleo
 ```
 
 ## Contrato do núcleo (a interface depende só disto)
 ```python
-# cofre/core/models.py
+# owlock/core/models.py
 @dataclass
 class Entry:
     service: str            # obrigatório, ex.: "Google"
@@ -45,7 +45,7 @@ class Entry:
     updated_at: str = <ISO 8601 UTC agora>
     def to_dict(self) -> dict; @classmethod from_dict(cls, d) -> Entry
 
-# cofre/core/vault.py
+# owlock/core/vault.py
 class Vault:
     path: Path
     entries: list[Entry]                     # leitura; ordenar fica a cargo de quem exibe
@@ -58,17 +58,17 @@ class Vault:
     def change_master_password(self, current: str, new: str) -> None   # WrongPasswordError se current errada; novo salt; salva
     def save(self) -> None
 
-# cofre/core/generator.py
+# owlock/core/generator.py
 def generate_password(length=20, upper=True, lower=True, digits=True, symbols=True) -> str
 
-DEFAULT_VAULT_PATH = Path.home() / ".cofre" / "cofre.vault"   (em vault.py)
+DEFAULT_VAULT_PATH = Path.home() / ".owlock" / "owlock.vault"   (em vault.py)
 MIN_MASTER_PASSWORD_LENGTH = 8                                  (em vault.py; create/change_master_password levantam ValueError abaixo disso)
 ```
 
 ## Formato do cofre (arquivo JSON, versionado)
 ```json
 {
-  "format": "cofre-vault",
+  "format": "owlock-vault",
   "version": 1,
   "kdf": {"name": "argon2id", "salt": "<b64>", "time_cost": 3, "memory_cost": 65536, "parallelism": 4},
   "cipher": {"name": "aes-256-gcm", "nonce": "<b64 12 bytes>"},
