@@ -86,14 +86,18 @@ MIN_MASTER_PASSWORD_LENGTH = 8                                  (em vault.py; cr
 - Python: bibliotecas de criptografia auditadas (`cryptography`, `argon2-cffi`), fácil de quem baixar rodar.
 - Argon2id com 64 MiB: resistente a força bruta com GPU; parâmetros ficam gravados no arquivo para poderem subir no futuro.
 - Cofre inteiro cifrado num bloco: simples e sem vazar quantidade de campos/nomes de serviço.
-- Interface Python 3.12 com Tk (o ambiente de desenvolvimento só tem Tk no 3.12).
+- Python 3.12 para desenvolvimento e para o executável (os testes rodam em 3.10+).
 
 ## Status
 - [x] Fatia 1: núcleo + testes (35 testes; rollback em memória quando a gravação falha)
 - [x] Fatia 2: interface (desbloqueio, lista, busca, formulário, cópia com limpeza em 30 s, bloqueio em 5 min)
 - [x] Fatia 3: README + LICENSE
 
-## Pendências conhecidas
-- Trocar senha mestra existe no núcleo (`Vault.change_master_password`), mas ainda não tem botão na interface.
-- Placeholder "Buscar..." não aparece (CustomTkinter ignora placeholder quando o campo usa textvariable).
-- Não testado em Windows de verdade (desenvolvido e testado em Linux com Xvfb).
+- [x] Troca de senha mestra na interface
+- [x] Executável Windows (PyInstaller) gerado pelo GitHub Actions a cada tag vX.Y.Z
+- [x] CI: testes no Linux e no Windows
+- [x] Testado manualmente no Windows 11 (criar, adicionar, copiar, editar, excluir, bloquear/desbloquear)
+
+## Próximos passos
+- Modernizar o visual da interface.
+- App de celular lendo o mesmo formato de cofre.

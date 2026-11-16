@@ -1,0 +1,37 @@
+name: Release (executável Windows)
+
+# Gera o Cofre.exe e publica numa Release sempre que uma tag vX.Y.Z é enviada:
+#   git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Instalar dependências
+        run: pip install -e ".[dev]" "pyinstaller>=6"
+      - name: Testes
+        run: pytest -q
+      - name: Gerar executável
+        run: >
+          pyinstaller --noconfirm --onefile --windowed --name Cofre
+          --collect-data customtkinter --paths .
+          packaging/run_cofre.py
+      - name: Publicar release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          sha256sum dist/Cofre.exe | tee dist/Cofre.exe.sha256
+          gh release create "$GITHUB_REF_NAME" dist/Cofre.exe dist/Cofre.exe.sha256 \
+            --title "Cofre $GITHUB_REF_NAME" \
+            --notes "Executável para Windows 10/11. Baixe o Cofre.exe e abra; nenhuma instalação é necessária. O arquivo .sha256 permite conferir a integridade do download."

@@ -1,5 +1,7 @@
 # Cofre
 
+[![Testes](https://github.com/Owaleee/cofre/actions/workflows/ci.yml/badge.svg)](https://github.com/Owaleee/cofre/actions/workflows/ci.yml)
+
 Gerenciador de senhas local, offline e de código aberto, escrito em Python.
 
 O Cofre guarda suas contas em um único arquivo criptografado, protegido por uma senha mestra. Nenhum dado sai do seu computador e o aplicativo não usa a rede.
@@ -10,11 +12,18 @@ O Cofre guarda suas contas em um único arquivo criptografado, protegido por uma
 - Para cada conta: serviço, login ou e-mail, senha, se possui 2FA e qual aplicativo autenticador é usado, além de notas.
 - Busca que não diferencia maiúsculas, minúsculas nem acentos, em serviço, login, aplicativo de 2FA e notas.
 - Gerador de senhas fortes.
+- Troca da senha mestra, que recifra o cofre com um novo salt.
 - Copiar senha para a área de transferência, com limpeza automática após 30 segundos.
 - Bloqueio automático após 5 minutos sem uso.
 - Backup automático (`.bak`) da versão anterior do arquivo e gravação atômica, que evita corromper o cofre se o programa for interrompido durante um salvamento.
 
-## Como instalar e executar
+## Download (Windows)
+
+Baixe o `Cofre.exe` na página de [Releases](https://github.com/Owaleee/cofre/releases) e abra. Não precisa instalar Python nem nada.
+
+Como o executável não tem assinatura digital, o Windows SmartScreen pode mostrar um aviso na primeira vez: clique em **Mais informações** e depois em **Executar assim mesmo**. Se quiser conferir a integridade do download, compare o hash SHA-256 do arquivo com o `Cofre.exe.sha256` publicado na mesma release (`Get-FileHash Cofre.exe` no PowerShell).
+
+## Executar a partir do código-fonte
 
 ### Windows
 
@@ -22,7 +31,7 @@ O Cofre guarda suas contas em um único arquivo criptografado, protegido por uma
 2. Abra o terminal (PowerShell ou Prompt de Comando) e execute:
 
 ```bash
-git clone <url-do-repositório>
+git clone https://github.com/Owaleee/cofre.git
 cd cofre
 python -m venv .venv
 .venv\Scripts\activate
@@ -35,7 +44,7 @@ cofre
 Requer Python 3.10 ou superior.
 
 ```bash
-git clone <url-do-repositório>
+git clone https://github.com/Owaleee/cofre.git
 cd cofre
 python -m venv .venv
 source .venv/bin/activate
@@ -104,21 +113,34 @@ cofre/
     generator.py   # gerador de senhas com `secrets`
     errors.py      # WrongPasswordError, VaultCorruptedError, VaultExistsError
   gui/
-    app.py         # CustomTkinter: telas de desbloqueio, lista, formulário
+    app.py         # CustomTkinter: desbloqueio, lista, formulários, troca de senha mestra
   __main__.py      # `python -m cofre`
-tests/             # pytest do núcleo
+packaging/         # ponto de entrada do executável (PyInstaller)
+tests/             # pytest: núcleo e teste de fumaça da interface
+.github/workflows/ # CI (Linux e Windows) e geração do Cofre.exe nas releases
 ```
 
 O núcleo (`cofre/core`) não depende da interface gráfica. Isso permite reaproveitar a lógica de cofre em outras interfaces, como uma API ou um aplicativo móvel.
 
 ## Testes
 
-Para instalar as dependências de desenvolvimento e executar os testes do núcleo:
+Para instalar as dependências de desenvolvimento e executar os testes:
 
 ```bash
 pip install -e ".[dev]"
 pytest
 ```
+
+Os testes da interface precisam de uma tela; no Linux sem ambiente gráfico, rode com `xvfb-run -a pytest`. O GitHub Actions executa a suíte no Linux e no Windows a cada push.
+
+## Gerar o executável
+
+```bash
+pip install pyinstaller
+pyinstaller --noconfirm --onefile --windowed --name Cofre --collect-data customtkinter --paths . packaging/run_cofre.py
+```
+
+O arquivo fica em `dist/`. Para publicar uma nova versão no GitHub, crie e envie uma tag (`git tag v0.2.0 && git push origin v0.2.0`): o workflow de release gera o `Cofre.exe` no Windows e o anexa à release.
 
 ## Roteiro
 
@@ -128,7 +150,7 @@ Próximos passos previstos:
 - Sincronização entre dispositivos.
 - Geração de códigos TOTP.
 - Importação e exportação em CSV.
-- Executável para Windows, gerado com PyInstaller.
+- Interface com visual mais moderno.
 
 ## Licença
 
