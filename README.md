@@ -140,7 +140,7 @@ pip install pyinstaller
 pyinstaller --noconfirm --onefile --windowed --name OwLock --collect-data customtkinter --paths . packaging/run_owlock.py
 ```
 
-O arquivo fica em `dist/`. Para publicar uma nova versão no GitHub, crie e envie uma tag (`git tag v0.2.0 && git push origin v0.2.0`): o workflow de release gera o `OwLock.exe` no Windows e o anexa à release.
+O arquivo fica em `dist/`. Para publicar uma nova versão, crie uma release no GitHub (aba **Releases** > **Draft a new release**, com uma tag como `v0.2.0`): o workflow gera o `OwLock.exe` no Windows e o anexa à release automaticamente.
 
 ## Roteiro
 

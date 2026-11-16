@@ -1,10 +1,10 @@
 name: Release (executável Windows)
 
-# Gera o OwLock.exe e publica numa Release sempre que uma tag vX.Y.Z é enviada:
-#   git tag v0.1.0 && git push origin v0.1.0
+# Ao publicar uma Release no GitHub (aba Releases > Draft a new release),
+# gera o OwLock.exe no Windows e o anexa à própria release.
 on:
-  push:
-    tags: ["v*"]
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -26,12 +26,10 @@ jobs:
           pyinstaller --noconfirm --onefile --windowed --name OwLock
           --collect-data customtkinter --paths .
           packaging/run_owlock.py
-      - name: Publicar release
+      - name: Anexar à release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           sha256sum dist/OwLock.exe | tee dist/OwLock.exe.sha256
-          gh release create "$GITHUB_REF_NAME" dist/OwLock.exe dist/OwLock.exe.sha256 \
-            --title "OwLock $GITHUB_REF_NAME" \
-            --notes "Executável para Windows 10/11. Baixe o OwLock.exe e abra; nenhuma instalação é necessária. O arquivo .sha256 permite conferir a integridade do download."
+          gh release upload "$GITHUB_REF_NAME" dist/OwLock.exe dist/OwLock.exe.sha256 --clobber
