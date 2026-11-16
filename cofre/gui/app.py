@@ -245,6 +245,90 @@ class EntryDialog(ctk.CTkToplevel):
         self.on_save(result)  # o callback fecha o diálogo se salvar
 
 
+class ChangePasswordDialog(ctk.CTkToplevel):
+    """Formulário modal para trocar a senha mestra."""
+
+    def __init__(self, app: "CofreApp", vault: Vault) -> None:
+        super().__init__(app)
+        self.app = app
+        self.vault = vault
+        self.title("Trocar senha mestra")
+        self.geometry("380x330")
+        self.resizable(False, False)
+        self.transient(app)
+        self._results: queue.Queue[tuple[str, object]] = queue.Queue()
+
+        self.fields: list[ctk.CTkEntry] = []
+        for text in ("Senha mestra atual", "Nova senha mestra", "Confirmar nova senha"):
+            ctk.CTkLabel(self, text=text, anchor="w").pack(fill="x", padx=20, pady=(12, 2))
+            entry = ctk.CTkEntry(self, show="•")
+            entry.pack(fill="x", padx=20)
+            entry.bind("<Return>", lambda _e: self._submit())
+            self.fields.append(entry)
+        self.error_label = ctk.CTkLabel(self, text="", text_color="#ff6b6b", wraplength=340)
+        self.error_label.pack(fill="x", padx=20, pady=(8, 0))
+        self.button = ctk.CTkButton(self, text="Trocar senha", command=self._submit)
+        self.button.pack(pady=12)
+        self.fields[0].focus_set()
+        self.after(150, self._grab)
+
+    def _grab(self) -> None:
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
+
+    def _submit(self) -> None:
+        if str(self.button.cget("state")) == "disabled":
+            return
+        current, new, confirm = (f.get() for f in self.fields)
+        if len(new) < MIN_MASTER_PASSWORD_LENGTH:
+            self.error_label.configure(text=f"A nova senha deve ter pelo menos {MIN_MASTER_PASSWORD_LENGTH} caracteres.")
+            return
+        if new != confirm:
+            self.error_label.configure(text="A confirmação não confere com a nova senha.")
+            return
+        if new == current:
+            self.error_label.configure(text="A nova senha é igual à atual.")
+            return
+        self.error_label.configure(text="")
+        self.button.configure(state="disabled", text="Trocando...")
+        for f in self.fields:
+            f.delete(0, "end")
+        vault = self.vault
+
+        def work() -> None:
+            try:
+                vault.change_master_password(current, new)
+                self._results.put(("ok", None))
+            except Exception as exc:  # noqa: BLE001 - repassado à thread principal
+                self._results.put(("err", exc))
+
+        threading.Thread(target=work, daemon=True).start()
+        self._poll()
+
+    def _poll(self) -> None:
+        try:
+            kind, payload = self._results.get_nowait()
+        except queue.Empty:
+            self.after(50, self._poll)
+            return
+        if not self.winfo_exists():
+            return
+        if kind == "ok":
+            self.app.on_master_password_changed()
+            return
+        self.button.configure(state="normal", text="Trocar senha")
+        if isinstance(payload, WrongPasswordError):
+            msg = "Senha mestra atual incorreta."
+        elif isinstance(payload, OSError):
+            msg = f"Não foi possível salvar o cofre: {payload}"
+        else:
+            msg = str(payload)
+        self.error_label.configure(text=msg)
+        self.fields[0].focus_set()
+
+
 class MainFrame(ctk.CTkFrame):
     """Tela principal: busca e lista de contas."""
 
@@ -253,12 +337,14 @@ class MainFrame(ctk.CTkFrame):
         self.app = app
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.pack(fill="x", padx=12, pady=(12, 6))
-        self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", lambda *_: self.refresh())
-        ctk.CTkEntry(bar, textvariable=self.search_var, placeholder_text="Buscar...").pack(
-            side="left", fill="x", expand=True
-        )
+        self.search_entry = ctk.CTkEntry(bar, placeholder_text="Buscar...")
+        self.search_entry.pack(side="left", fill="x", expand=True)
+        self.search_entry.bind("<KeyRelease>", lambda _e: self.refresh())
         ctk.CTkButton(bar, text="+ Nova conta", width=110, command=app.new_entry).pack(side="left", padx=(8, 0))
+        ctk.CTkButton(
+            bar, text="Trocar senha mestra", width=150, fg_color="gray40", hover_color="gray30",
+            command=app.change_master_password,
+        ).pack(side="left", padx=(8, 0))
         ctk.CTkButton(bar, text="Bloquear", width=90, fg_color="gray40", hover_color="gray30", command=app.lock).pack(
             side="left", padx=(8, 0)
         )
@@ -283,7 +369,7 @@ class MainFrame(ctk.CTkFrame):
             child.destroy()
         if vault is None:
             return
-        text = self.search_var.get().strip()
+        text = self.search_entry.get().strip()
         entries = vault.search(text) if text else list(vault.entries)
         entries.sort(key=lambda e: e.service.casefold())
         if not entries:
@@ -331,7 +417,7 @@ class CofreApp(ctk.CTk):
         self.vault_path = Path(vault_path)
         self.vault: Vault | None = None
         self.frame: ctk.CTkFrame | None = None
-        self._dialog: EntryDialog | None = None
+        self._dialog: ctk.CTkToplevel | None = None
         self._lock_job: str | None = None
         self._clip_job: str | None = None
         self._copied_text: str | None = None
@@ -419,6 +505,20 @@ class CofreApp(ctk.CTk):
                 self.frame.refresh()
 
         self._dialog = EntryDialog(self, entry, save)
+
+    def change_master_password(self) -> None:
+        """Abre o formulário de troca da senha mestra."""
+        if self.vault is None or (self._dialog is not None and self._dialog.winfo_exists()):
+            return
+        self._dialog = ChangePasswordDialog(self, self.vault)
+
+    def on_master_password_changed(self) -> None:
+        """Fecha o formulário e avisa que a senha mudou."""
+        if self._dialog is not None:
+            self._dialog.destroy()
+            self._dialog = None
+        if isinstance(self.frame, MainFrame):
+            self.frame.set_status("Senha mestra alterada. Use a nova senha para desbloquear.", 6000)
 
     def delete_entry(self, entry: Entry) -> None:
         if self.vault is None:
