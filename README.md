@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/logo.png" width="128" alt="Ícone do OwLock"></p>
+
 # OwLock
 
 [![Testes](https://github.com/Owaleee/OwLock/actions/workflows/ci.yml/badge.svg)](https://github.com/Owaleee/OwLock/actions/workflows/ci.yml)
