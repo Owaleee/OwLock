@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import inspect
+import os
 import tempfile
 import json
 import mimetypes
@@ -34,15 +35,29 @@ def dev_store(vault_path: Path) -> FileStore:
 
 
 def make_save_dialog(directory: Path | None = None):
-    """save_dialog de desenvolvimento: devolve <pasta temporária>/owlock-kit-<n>.html (n cresce a cada chamada)."""
+    """save_dialog de desenvolvimento: devolve <pasta temporária>/owlock-kit-<n>.html (n cresce a cada chamada).
+
+    Para outros tipos (ex.: exportação .csv) usa a extensão do nome sugerido: owlock-export-<n>.csv.
+    """
     base = Path(directory) if directory is not None else Path(tempfile.gettempdir())
     counter = {"n": 0}
 
     def save_dialog(default_name: str) -> str:
         counter["n"] += 1
-        return str(base / f"owlock-kit-{counter['n']}.html")
+        suffix = Path(default_name).suffix.lower() or ".html"
+        stem = "owlock-kit" if suffix == ".html" else "owlock-export"
+        return str(base / f"{stem}-{counter['n']}{suffix}")
 
     return save_dialog
+
+
+def make_open_dialog():
+    """open_dialog de desenvolvimento: devolve o caminho da variável OWLOCK_DEV_IMPORT (ou cancela)."""
+
+    def open_dialog() -> str | None:
+        return os.environ.get("OWLOCK_DEV_IMPORT") or None
+
+    return open_dialog
 
 
 def _public_methods() -> set[str]:
@@ -206,7 +221,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.seed and not args.vault.exists():
         seed_vault(args.vault)
         print(f"Cofre de TESTE criado em {args.vault} (senha mestra: {SEED_PASSWORD}). Não use dados reais.")
-    api = Api(args.vault, store=dev_store(args.vault), save_dialog=make_save_dialog())
+    api = Api(args.vault, store=dev_store(args.vault), save_dialog=make_save_dialog(), open_dialog=make_open_dialog())
     server = make_server(api, args.port)
     print(f"Servidor de desenvolvimento em http://127.0.0.1:{server.server_address[1]}/ (Ctrl+C para sair)")
     try:

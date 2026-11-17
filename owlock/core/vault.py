@@ -849,6 +849,18 @@ class Vault:
             raise
         return entry
 
+    def add_many(self, entries: list[Entry], categories: list[Category] | None = None) -> int:
+        """Adiciona várias entradas (e categorias novas) num único salvamento. Em falha, nada muda."""
+        prev_entries, prev_categories = list(self.entries), list(self.categories)
+        self.categories.extend(categories or [])
+        self.entries.extend(entries)
+        try:
+            self.save()
+        except BaseException:
+            self.entries, self.categories = prev_entries, prev_categories
+            raise
+        return len(entries)
+
     def _index(self, entry_id: str) -> int:
         for i, e in enumerate(self.entries):
             if e.id == entry_id:
@@ -1013,6 +1025,10 @@ class Vault:
             raise
         self._refresh_bak()
         self._update_snapshots()
+
+    def verify_password(self, password: str) -> None:
+        """Confere a senha mestra (WrongPasswordError se estiver errada)."""
+        self._check_current(password if isinstance(password, str) else "")
 
     def reveal_secret_key(self, password: str) -> str:
         """Confere a senha mestra e devolve a Chave Secreta formatada."""

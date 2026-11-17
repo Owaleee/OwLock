@@ -21,6 +21,20 @@ def _save_dialog_type(webview):
     return webview.SAVE_DIALOG  # versões antigas
 
 
+def _open_dialog_type(webview):
+    """Constante do diálogo "Abrir" da versão instalada do pywebview."""
+    file_dialog = getattr(webview, "FileDialog", None)
+    if file_dialog is not None and hasattr(file_dialog, "OPEN"):
+        return file_dialog.OPEN
+    return webview.OPEN_DIALOG  # versões antigas
+
+
+_FILE_TYPES = {
+    ".csv": ("Planilha CSV (*.csv)",),
+    ".html": ("Página da web (*.html)",),
+}
+
+
 def run(vault_path: Path, tray: bool = False) -> None:
     """Cria a janela e bloqueia até ela ser fechada.
 
@@ -39,13 +53,26 @@ def run(vault_path: Path, tray: bool = False) -> None:
         result = window.create_file_dialog(
             _save_dialog_type(webview),
             save_filename=default_name,
-            file_types=("Página da web (*.html)",),
+            file_types=_FILE_TYPES.get(Path(default_name).suffix.lower(), ("Todos os arquivos (*.*)",)),
         )
         if not result:
             return None
         return result if isinstance(result, str) else str(result[0])
 
-    api = Api(vault_path, store=default_store(), save_dialog=save_dialog)
+    def open_dialog() -> str | None:
+        window = holder.get("window")
+        if window is None:
+            return None
+        result = window.create_file_dialog(
+            _open_dialog_type(webview),
+            allow_multiple=False,
+            file_types=("Planilha CSV (*.csv)", "Todos os arquivos (*.*)"),
+        )
+        if not result:
+            return None
+        return result if isinstance(result, str) else str(result[0])
+
+    api = Api(vault_path, store=default_store(), save_dialog=save_dialog, open_dialog=open_dialog)
     desktop = sys.platform == "win32"  # bandeja, atalho global e sessão só existem no Windows
     from owlock.app.desktop import tray as tray_module
 

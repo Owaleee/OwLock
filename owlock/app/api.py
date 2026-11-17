@@ -44,6 +44,7 @@ from owlock.core.catalog import Catalog, Service, brand_icons, icon_url, normali
 from owlock.core.health import password_health
 from owlock.core.strength import password_strength
 from owlock.app.api_desktop import DesktopApiMixin
+from owlock.app.api_transfer import TransferApiMixin
 
 _FILTERS = ("all", "favorites", "2fa", "attention")
 _FIELDS = ("username", "password")
@@ -204,7 +205,7 @@ def _not_found() -> dict[str, Any]:
     return _error("not_found", "Conta não encontrada.")
 
 
-class Api(DesktopApiMixin):
+class Api(TransferApiMixin, DesktopApiMixin):
     """Ponte entre a interface e o núcleo. Thread-safe (RLock)."""
 
     def __init__(
@@ -218,11 +219,14 @@ class Api(DesktopApiMixin):
         url_opener: Callable[[str], Any] | None = None,
         store: SecretKeyStore | None = None,
         save_dialog: Callable[[str], str | None] | None = None,
+        open_dialog: Callable[[], str | None] | None = None,
         kdf_params: dict[str, int] | None = None,
     ) -> None:
         self._path = Path(vault_path)
         self._store_obj = store
         self._save_dialog = save_dialog
+        self._open_dialog = open_dialog
+        self._pending_import = None
         self._kdf_params = dict(kdf_params) if kdf_params is not None else None
         self._v1_backup: Path | None = None
         self._auto_lock = auto_lock_seconds
@@ -270,6 +274,7 @@ class Api(DesktopApiMixin):
 
     def _do_lock(self) -> None:
         self._vault = None
+        self._pending_import = None
         self._cancel_timer()
         self._clear_clipboard_if_ours()
 

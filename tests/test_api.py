@@ -420,6 +420,7 @@ def test_public_surface(api):
         "delete_service", "brand_icons", "emergency_kit", "save_emergency_kit", "delete_v1_backup",
         "toggle_favorite", "list_backups", "restore_backup",
         "get_desktop_config", "save_desktop_config", "quick_hide", "quick_open_main", "generate_and_copy",
+        "import_pick", "import_confirm", "import_cancel", "export_vault",
     }
 
 
