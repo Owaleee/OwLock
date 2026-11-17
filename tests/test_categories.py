@@ -9,6 +9,7 @@ from owlock.core import vault as vault_mod
 from owlock.core import crypto
 
 FAST = {"time_cost": 1, "memory_cost": 8192, "parallelism": 1}
+from tests._store import STORE  # noqa: E402
 PW = "senha-mestra-1"
 
 DEFAULTS = [
@@ -28,26 +29,45 @@ def path(tmp_path):
 
 @pytest.fixture
 def vault(path):
-    return Vault.create(path, PW, kdf_params=FAST)
+    return Vault.create(path, PW, STORE, kdf_params=FAST)
 
 
 def _rewrite_plain(path, mutate):
-    """Reescreve o conteúdo cifrado do cofre, aplicando `mutate` ao dict claro."""
-    doc = json.loads(path.read_text())
+    """Reescreve o conteúdo cifrado do cofre v2, aplicando `mutate` ao dict claro.
+
+    O dict claro tem "entries" (lista de dicts) mais as chaves de meta (categories, settings, services).
+    """
     import base64
 
-    salt = base64.b64decode(doc["kdf"]["salt"])
+    b64d = lambda v: base64.b64decode(v)  # noqa: E731
+    b64e = lambda v: base64.b64encode(v).decode()  # noqa: E731
+    doc = json.loads(path.read_text())
+    vid = doc["vault_id"]
+    salt = b64d(doc["kdf"]["salt"])
     params = {k: doc["kdf"][k] for k in ("time_cost", "memory_cost", "parallelism")}
-    header = Vault._header(salt, params)
-    key = crypto.derive_key(PW, salt, **params)
-    plain = crypto.decrypt(
-        key, base64.b64decode(doc["cipher"]["nonce"]),
-        base64.b64decode(doc["ciphertext"]), Vault._aad(header),
-    )
-    data = mutate(json.loads(plain))
-    nonce, ct = crypto.encrypt(key, json.dumps(data).encode(), Vault._aad(header))
-    doc["cipher"]["nonce"] = base64.b64encode(nonce).decode()
-    doc["ciphertext"] = base64.b64encode(ct).decode()
+    kek = crypto.derive_kek(PW, salt, STORE.get(vid), bytes.fromhex(vid), **params)
+    header = {k: doc[k] for k in ("format", "version", "vault_id", "kdf", "secret_key", "cipher")}
+    aad = json.dumps(header, sort_keys=True, separators=(",", ":")).encode()
+    vkey = crypto.decrypt(kek, b64d(doc["key"]["nonce"]), b64d(doc["key"]["ciphertext"]), aad)
+    meta = json.loads(crypto.decrypt(
+        vkey, b64d(doc["meta"]["nonce"]), b64d(doc["meta"]["ciphertext"]),
+        b"owlock-v2|" + vid.encode() + b"|meta"))
+    entries = [
+        json.loads(crypto.decrypt(
+            vkey, b64d(e["nonce"]), b64d(e["ciphertext"]),
+            b"owlock-v2|" + vid.encode() + b"|entry|" + e["id"].encode()))
+        for e in doc["entries"]
+    ]
+    data = mutate({"entries": entries, **meta})
+    entries = data.pop("entries")
+    nonce, ct = crypto.encrypt(vkey, json.dumps(data).encode(), b"owlock-v2|" + vid.encode() + b"|meta")
+    doc["meta"] = {"nonce": b64e(nonce), "ciphertext": b64e(ct)}
+    out = []
+    for e in entries:
+        n, c = crypto.encrypt(
+            vkey, json.dumps(e).encode(), b"owlock-v2|" + vid.encode() + b"|entry|" + e["id"].encode())
+        out.append({"id": e["id"], "nonce": b64e(n), "ciphertext": b64e(c)})
+    doc["entries"] = out
     path.write_text(json.dumps(doc))
 
 
@@ -78,25 +98,25 @@ def test_category_dict_roundtrip_and_validation():
 def test_new_vault_has_default_categories(path, vault):
     assert [(c.name, c.color, c.icon) for c in vault.categories] == DEFAULTS
     assert len({c.id for c in vault.categories}) == 6
-    again = Vault.open(path, PW)
+    again = Vault.open(path, PW, STORE)
     assert again.categories == vault.categories
 
 
 def test_old_vault_without_key_gets_defaults_and_persists(path, vault):
     vault.add(Entry("Antiga", "u", "p"))
     _rewrite_plain(path, lambda d: {"entries": d["entries"]})
-    old = Vault.open(path, PW)
+    old = Vault.open(path, PW, STORE)
     assert [(c.name, c.color, c.icon) for c in old.categories] == DEFAULTS
     ids_first = [c.id for c in old.categories]
     old.save()
-    again = Vault.open(path, PW)
+    again = Vault.open(path, PW, STORE)
     assert [c.id for c in again.categories] == ids_first
     assert len(again.entries) == 1
 
 
 def test_present_empty_key_does_not_recreate(path, vault):
     _rewrite_plain(path, lambda d: {**d, "categories": []})
-    assert Vault.open(path, PW).categories == []
+    assert Vault.open(path, PW, STORE).categories == []
 
 
 def test_entry_without_category_id_opens_empty(path, vault):
@@ -108,26 +128,26 @@ def test_entry_without_category_id_opens_empty(path, vault):
         return d
 
     _rewrite_plain(path, strip)
-    assert Vault.open(path, PW).entries[0].category_id == ""
+    assert Vault.open(path, PW, STORE).entries[0].category_id == ""
 
 
 def test_invalid_category_in_file_is_corrupted(path, vault):
     _rewrite_plain(path, lambda d: {**d, "categories": [{"name": "sem id"}]})
     with pytest.raises(VaultCorruptedError):
-        Vault.open(path, PW)
+        Vault.open(path, PW, STORE)
     _rewrite_plain(path, lambda d: {**d, "categories": ["texto"]})
     with pytest.raises(VaultCorruptedError):
-        Vault.open(path, PW)
+        Vault.open(path, PW, STORE)
 
 
 def test_add_update_delete_category(path, vault):
     c = vault.add_category(Category("Estudos", "lime", "school"))
-    assert Vault.open(path, PW).categories[-1] == c
+    assert Vault.open(path, PW, STORE).categories[-1] == c
     vault.update_category(Category("Faculdade", "blue", "code", id=c.id))
-    reopened = Vault.open(path, PW)
+    reopened = Vault.open(path, PW, STORE)
     assert (reopened.categories[-1].name, reopened.categories[-1].icon) == ("Faculdade", "code")
     vault.delete_category(c.id)
-    assert c.id not in [x.id for x in Vault.open(path, PW).categories]
+    assert c.id not in [x.id for x in Vault.open(path, PW, STORE).categories]
     with pytest.raises(KeyError):
         vault.update_category(Category("X", id="nao-existe"))
     with pytest.raises(KeyError):
@@ -145,7 +165,7 @@ def test_delete_category_moves_entries_and_saves_once(path, vault, monkeypatch):
     monkeypatch.setattr(Vault, "save", lambda self: (calls.append(1), real_save(self))[1])
     assert vault.delete_category(cat.id) == 2
     assert len(calls) == 1
-    again = Vault.open(path, PW)
+    again = Vault.open(path, PW, STORE)
     by_service = {e.service: e.category_id for e in again.entries}
     assert by_service == {"A": "", "B": "", "C": other.id}
     assert a.category_id == b.category_id == "" and c.category_id == other.id

@@ -10,6 +10,7 @@ from tests.test_categories import _rewrite_plain
 from tests.test_api import FakeClipboard, FakeClock, FakeTimer, err
 
 FAST = {"time_cost": 1, "memory_cost": 8192, "parallelism": 1}
+from tests._store import STORE  # noqa: E402
 PW = "senha-mestra-1"
 
 
@@ -25,7 +26,7 @@ def path(tmp_path):
 
 @pytest.fixture
 def vault(path):
-    return Vault.create(path, PW, kdf_params=FAST)
+    return Vault.create(path, PW, STORE, kdf_params=FAST)
 
 
 def change(vault, entry, password):
@@ -70,7 +71,7 @@ def test_history_limit_20(vault):
 def test_history_persists_after_reopen(vault, path):
     e = vault.add(Entry("A", password="a", url="https://a.com"))
     change(vault, e, "b")
-    reopened = Vault.open(path, PW).entries[0]
+    reopened = Vault.open(path, PW, STORE).entries[0]
     assert reopened.url == "https://a.com"
     assert [h["password"] for h in reopened.password_history] == ["a"]
 
@@ -86,7 +87,7 @@ def test_old_vault_without_new_fields_opens(vault, path):
         return data
 
     _rewrite_plain(path, strip)
-    e = Vault.open(path, PW).entries[0]
+    e = Vault.open(path, PW, STORE).entries[0]
     assert e.url == "" and e.password_history == []
 
 
@@ -104,7 +105,7 @@ def test_invalid_history_is_corrupted(vault, path, bad):
 
     _rewrite_plain(path, breakit)
     with pytest.raises(VaultCorruptedError):
-        Vault.open(path, PW)
+        Vault.open(path, PW, STORE)
 
 
 def test_update_rollback_restores_history(vault, monkeypatch):
@@ -125,14 +126,14 @@ def test_update_rollback_restores_history(vault, monkeypatch):
 # ---------------- núcleo: settings ----------------
 def test_settings_defaults(vault, path):
     assert vault.settings == Settings(5, 30)
-    assert Vault.open(path, PW).settings == Settings(5, 30)
+    assert Vault.open(path, PW, STORE).settings == Settings(5, 30)
     assert AUTO_LOCK_OPTIONS == (1, 2, 5, 10, 15, 30)
     assert CLIPBOARD_OPTIONS == (10, 20, 30, 45, 60, 90)
 
 
 def test_settings_persist(vault, path):
     vault.update_settings(Settings(15, 90))
-    assert Vault.open(path, PW).settings == Settings(15, 90)
+    assert Vault.open(path, PW, STORE).settings == Settings(15, 90)
 
 
 @pytest.mark.parametrize(
@@ -146,7 +147,7 @@ def test_invalid_settings_in_file_fall_back(vault, path, raw):
         return data
 
     _rewrite_plain(path, put)
-    assert Vault.open(path, PW).settings == Settings(5, 30)
+    assert Vault.open(path, PW, STORE).settings == Settings(5, 30)
 
 
 def test_partially_valid_settings_keep_valid_part(vault, path):
@@ -155,7 +156,7 @@ def test_partially_valid_settings_keep_valid_part(vault, path):
         return data
 
     _rewrite_plain(path, put)
-    assert Vault.open(path, PW).settings == Settings(10, 30)
+    assert Vault.open(path, PW, STORE).settings == Settings(10, 30)
 
 
 def test_update_settings_rejects_invalid(vault):
@@ -205,7 +206,7 @@ def opener():
 @pytest.fixture
 def api(path, vault, clock, clip, opener):
     vault.add(Entry("Site", "u", "atual"))
-    return Api(path, clipboard=clip, clock=clock, timer_factory=FakeTimer, url_opener=opener)
+    return Api(path, clipboard=clip, clock=clock, timer_factory=FakeTimer, url_opener=opener, store=STORE)
 
 
 @pytest.fixture
@@ -285,17 +286,17 @@ def test_clear_after_uses_setting(opened, clip):
 
 
 def test_settings_persist_across_api_unlock(path, vault, clock, clip):
-    a = Api(path, clipboard=clip, clock=clock, timer_factory=FakeTimer)
+    a = Api(path, clipboard=clip, clock=clock, timer_factory=FakeTimer, store=STORE)
     a.unlock(PW)
     a.save_settings({"auto_lock_minutes": 10, "clipboard_clear_seconds": 60})
-    b = Api(path, clipboard=clip, clock=clock, timer_factory=FakeTimer)
+    b = Api(path, clipboard=clip, clock=clock, timer_factory=FakeTimer, store=STORE)
     b.unlock(PW)
     assert b.get_settings()["settings"] == {"auto_lock_minutes": 10, "clipboard_clear_seconds": 60}
     assert b.status()["auto_lock_seconds"] == 600
 
 
 def test_create_vault_applies_defaults(tmp_path, clock, clip):
-    a = Api(tmp_path / "novo.vault", auto_lock_seconds=99, clipboard=clip, clock=clock)
+    a = Api(tmp_path / "novo.vault", auto_lock_seconds=99, clipboard=clip, clock=clock, store=STORE, kdf_params=FAST)
     assert a.create_vault("senha-longa-1", "senha-longa-1")["ok"]
     assert a.status()["auto_lock_seconds"] == 300
 
@@ -393,7 +394,7 @@ def test_open_url_revalidates_saved_scheme(opened, opener):
 @pytest.mark.parametrize("result", [False, RuntimeError("x")])
 def test_open_url_failure(path, vault, clock, clip, result):
     op = Opener(result)
-    a = Api(path, clipboard=clip, clock=clock, timer_factory=FakeTimer, url_opener=op)
+    a = Api(path, clipboard=clip, clock=clock, timer_factory=FakeTimer, url_opener=op, store=STORE)
     a.unlock(PW)
     e = save(a, url="example.com")["entry"]
     err(a.open_url(e["id"]), "open_failed")
@@ -406,7 +407,7 @@ def test_open_url_called_outside_lock(path, vault, clock, clip):
         seen["owned"] = a._lock._is_owned()
         return True
 
-    a = Api(path, clipboard=clip, clock=clock, timer_factory=FakeTimer, url_opener=op)
+    a = Api(path, clipboard=clip, clock=clock, timer_factory=FakeTimer, url_opener=op, store=STORE)
     a.unlock(PW)
     e = save(a, url="example.com")["entry"]
     assert a.open_url(e["id"])["ok"]

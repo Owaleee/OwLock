@@ -40,3 +40,54 @@ def test_new_salt_and_defaults():
     assert crypto.DEFAULT_KDF_PARAMS == {
         "time_cost": 3, "memory_cost": 65536, "parallelism": 4,
     }
+
+
+# ---- v2: KEK ----
+import hashlib  # noqa: E402
+import hmac as _hmac  # noqa: E402
+
+KEK_SALT = bytes(range(16))
+KEK_SECRET = bytes(range(16)) + b"\x40"
+KEK_VAULT_ID = bytes(range(16, 32))
+KEK_PW = "senha-fixa-123"
+
+
+def _kek(password=KEK_PW, salt=KEK_SALT, secret=KEK_SECRET, vault_id=KEK_VAULT_ID, **params):
+    return crypto.derive_kek(password, salt, secret, vault_id, **(params or FAST))
+
+
+def _ref_hkdf(ikm, salt, info, length=32):
+    """HKDF-SHA256 (RFC 5869) escrito à mão, independente da biblioteca."""
+    prk = _hmac.new(salt, ikm, hashlib.sha256).digest()
+    out, block, i = b"", b"", 1
+    while len(out) < length:
+        block = _hmac.new(prk, block + info + bytes([i]), hashlib.sha256).digest()
+        out += block
+        i += 1
+    return out[:length]
+
+
+def test_hkdf_matches_reference_and_fixed_vector():
+    assert crypto.hkdf(b"ikm", b"salt", b"info") == _ref_hkdf(b"ikm", b"salt", b"info")
+    assert crypto.hkdf(b"ikm", b"salt", b"info").hex() == (
+        "fe8f9615d2374c0d17f77d1aeaf408c2e75fe0466073d0def23c733e2f862dfd")
+
+
+def test_kek_fixed_vector_locks_the_algorithm():
+    assert _kek().hex() == "66b523af58baa9ad8400b43c3254d50f07c729a6385e57e07678868fcfc6f2dd"
+
+
+def test_kek_matches_documented_construction():
+    pw = crypto.derive_key(KEK_PW, KEK_SALT, **FAST)
+    sk = _ref_hkdf(KEK_SECRET, KEK_VAULT_ID, b"owlock-v2 secret key")
+    assert _kek() == _ref_hkdf(pw + sk, KEK_SALT, b"owlock-v2 kek")
+
+
+def test_kek_depends_on_password_and_secret_key():
+    base = _kek()
+    assert len(base) == 32
+    assert _kek(password="outra-senha-123") != base
+    assert _kek(secret=bytes(range(1, 17)) + b"\x40") != base
+    assert _kek(salt=bytes(range(1, 17))) != base
+    assert _kek(vault_id=bytes(16)) != base
+    assert _kek(time_cost=2, memory_cost=8192, parallelism=1) != base

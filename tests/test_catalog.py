@@ -7,6 +7,7 @@ from owlock.core import catalog as catalog_module
 from tests.test_categories import _rewrite_plain
 
 FAST = {"time_cost": 1, "memory_cost": 8192, "parallelism": 1}
+from tests._store import STORE  # noqa: E402
 PW = "senha-mestra-1"
 
 
@@ -17,7 +18,7 @@ def path(tmp_path):
 
 @pytest.fixture
 def vault(path):
-    return Vault.create(path, PW, kdf_params=FAST)
+    return Vault.create(path, PW, STORE, kdf_params=FAST)
 
 
 def custom(name="Portal", aliases=(), url="https://portal.exemplo.edu.br", icon="", key="custom-1"):
@@ -154,7 +155,7 @@ def test_vault_new_has_empty_services(vault):
 
 def test_services_persist(vault, path):
     vault.update_services([custom(aliases=["faculdade"])], {"steam": "https://x.exemplo/"})
-    again = Vault.open(path, PW)
+    again = Vault.open(path, PW, STORE)
     assert again.services["custom"][0]["aliases"] == ["faculdade"]
     assert again.services["overrides"] == {"steam": "https://x.exemplo/"}
 
@@ -175,7 +176,7 @@ def test_old_vault_without_services_opens(vault, path):
         return data
 
     _rewrite_plain(path, strip)
-    v = Vault.open(path, PW)
+    v = Vault.open(path, PW, STORE)
     assert v.services == {"custom": [], "overrides": {}}
     assert v.entries[0].icon == ""
 
@@ -186,7 +187,7 @@ def test_services_partial_keys_default_empty(vault, path):
         return data
 
     _rewrite_plain(path, partial)
-    assert Vault.open(path, PW).services == {"custom": [], "overrides": {"steam": "https://x.exemplo/"}}
+    assert Vault.open(path, PW, STORE).services == {"custom": [], "overrides": {"steam": "https://x.exemplo/"}}
 
 
 @pytest.mark.parametrize(
@@ -207,7 +208,7 @@ def test_invalid_services_is_corrupted(vault, path, bad):
 
     _rewrite_plain(path, breakit)
     with pytest.raises(VaultCorruptedError):
-        Vault.open(path, PW)
+        Vault.open(path, PW, STORE)
 
 
 def test_update_services_rollback(vault, monkeypatch):

@@ -17,12 +17,30 @@ from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
 from owlock.app.api import Api
-from owlock.core import Entry, Vault
+from owlock.core import Entry, FileStore, Vault
 
 HOST = "127.0.0.1"
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 MAX_BODY = 1_000_000
 SEED_PASSWORD = "senha-de-teste-123"
+
+
+def dev_store(vault_path: Path) -> FileStore:
+    """Guarda a Chave Secreta numa pasta ao lado do cofre (não usa o chaveiro do sistema)."""
+    vault_path = Path(vault_path)
+    return FileStore(vault_path.with_name(vault_path.name + ".keys"))
+
+
+def make_save_dialog(directory: Path | None = None):
+    """save_dialog de desenvolvimento: devolve /tmp/owlock-kit-<n>.html (n cresce a cada chamada)."""
+    base = Path(directory) if directory is not None else Path("/tmp")
+    counter = {"n": 0}
+
+    def save_dialog(default_name: str) -> str:
+        counter["n"] += 1
+        return str(base / f"owlock-kit-{counter['n']}.html")
+
+    return save_dialog
 
 
 def _public_methods() -> set[str]:
@@ -128,9 +146,9 @@ def make_server(api: Api, port: int = 8765, web_dir: Path | None = None) -> Thre
     return ThreadingHTTPServer((HOST, port), Handler)
 
 
-def seed_vault(path: Path) -> None:
+def seed_vault(path: Path, store: FileStore | None = None) -> None:
     """Cria um cofre de teste com contas de exemplo."""
-    vault = Vault.create(path, SEED_PASSWORD)
+    vault = Vault.create(path, SEED_PASSWORD, store if store is not None else dev_store(path))
     cats = {c.name: c.id for c in vault.categories}
     samples = [
         Entry("Google", "seu.email@gmail.com", "Gx4!nP8s#Qd1vL2@", True, "Google Authenticator", "Conta principal", cats["Pessoal"], url="https://accounts.google.com"),
@@ -177,7 +195,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.seed and not args.vault.exists():
         seed_vault(args.vault)
         print(f"Cofre de TESTE criado em {args.vault} (senha mestra: {SEED_PASSWORD}). Não use dados reais.")
-    server = make_server(Api(args.vault), args.port)
+    api = Api(args.vault, store=dev_store(args.vault), save_dialog=make_save_dialog())
+    server = make_server(api, args.port)
     print(f"Servidor de desenvolvimento em http://127.0.0.1:{server.server_address[1]}/ (Ctrl+C para sair)")
     try:
         server.serve_forever()

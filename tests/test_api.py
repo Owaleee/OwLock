@@ -6,6 +6,7 @@ from owlock.app.api import Api
 from owlock.core import Entry, Vault
 
 FAST = {"time_cost": 1, "memory_cost": 8192, "parallelism": 1}
+from tests._store import STORE  # noqa: E402
 PW = "senha-mestra-1"
 
 
@@ -65,7 +66,7 @@ def path(tmp_path):
 
 @pytest.fixture
 def seeded(path):
-    v = Vault.create(path, PW, kdf_params=FAST)
+    v = Vault.create(path, PW, STORE, kdf_params=FAST)
     v.add(Entry("zeta", "u1@x.com", "123456", True, "Authy", "nota um"))
     v.add(Entry("Alfa", "u2@x.com", "T7#qLm9!vRz2@kWp", False))
     v.add(Entry("beta", "u3@x.com", "senha123", False, "", "banco"))
@@ -85,7 +86,7 @@ def clip():
 
 @pytest.fixture
 def api(path, seeded, clock, clip):
-    return Api(path, clipboard=clip, clock=clock, timer_factory=FakeTimer)
+    return Api(path, clipboard=clip, clock=clock, timer_factory=FakeTimer, store=STORE)
 
 
 @pytest.fixture
@@ -116,7 +117,7 @@ def test_status_before_and_after(api, path):
 
 
 def test_status_missing_vault(tmp_path):
-    a = Api(tmp_path / "nao.vault", clipboard=FakeClipboard())
+    a = Api(tmp_path / "nao.vault", clipboard=FakeClipboard(), store=STORE)
     assert a.status()["exists"] is False
     err(a.unlock(PW), "not_found")
 
@@ -135,11 +136,12 @@ def test_unlock_corrupted_mentions_bak(api, path):
 
 def test_create_vault_codes(tmp_path):
     p = tmp_path / "novo" / "c.vault"
-    a = Api(p, clipboard=FakeClipboard())
+    a = Api(p, clipboard=FakeClipboard(), store=STORE, kdf_params=FAST)
     err(a.create_vault("curta", "curta"), "password_too_short")
     err(a.create_vault("senha-longa-1", "outra-coisa-1"), "mismatch")
     assert not p.exists()
-    assert a.create_vault("senha-longa-1", "senha-longa-1") == {"ok": True}
+    r = a.create_vault("senha-longa-1", "senha-longa-1")
+    assert r["ok"] is True and r["secret_key"].startswith("OW2-")
     assert p.exists() and a.status()["unlocked"]
     err(a.create_vault("senha-longa-1", "senha-longa-1"), "exists")
 
@@ -275,7 +277,7 @@ def test_save_new(opened, path):
     assert r["ok"] and r["entry"]["service"] == "Nova"
     assert r["entry"]["twofa_app"] == ""
     assert "password" not in r["entry"]
-    assert len(Vault.open(path, PW).entries) == 5
+    assert len(Vault.open(path, PW, STORE).entries) == 5
 
 
 def test_save_edit_keeps_password(opened, path):
@@ -291,7 +293,7 @@ def test_save_edit_keeps_password(opened, path):
         assert r["entry"]["has_2fa"] and r["entry"]["twofa_app"] == "Authy"
         assert r["entry"]["created_at"] == created
         assert opened.reveal_password(i)["password"] == "T7#qLm9!vRz2@kWp"
-    assert Vault.open(path, PW).entries[1].service == "Alfa2"
+    assert Vault.open(path, PW, STORE).entries[1].service == "Alfa2"
 
 
 def test_save_edit_changes_password_and_clears_2fa_app(opened):
@@ -322,7 +324,7 @@ def test_delete(opened, path):
     i = ids(opened)["beta"]
     assert opened.delete_entry(i) == {"ok": True}
     err(opened.delete_entry(i), "not_found")
-    assert len(Vault.open(path, PW).entries) == 3
+    assert len(Vault.open(path, PW, STORE).entries) == 3
 
 
 # ---- senhas ----
@@ -344,7 +346,7 @@ def test_change_master_password_codes(opened, path):
     err(opened.change_master_password(PW, PW, PW), "same_password")
     err(opened.change_master_password("errada-errada", "nova-senha-9", "nova-senha-9"), "wrong_password")
     assert opened.change_master_password(PW, "nova-senha-9", "nova-senha-9") == {"ok": True}
-    assert len(Vault.open(path, "nova-senha-9").entries) == 4
+    assert len(Vault.open(path, "nova-senha-9", STORE).entries) == 4
 
 
 # ---- bloqueio automático ----
@@ -415,7 +417,7 @@ def test_public_surface(api):
         "get_settings", "save_settings", "get_password_history",
         "reveal_history_password", "copy_history_password", "open_url",
         "lookup_service", "list_services", "save_service", "reset_service",
-        "delete_service", "brand_icons",
+        "delete_service", "brand_icons", "emergency_kit", "save_emergency_kit", "delete_v1_backup",
     }
 
 
@@ -639,7 +641,7 @@ def opener():
 
 @pytest.fixture
 def lib(path, seeded, clock, clip, opener):
-    a = Api(path, clipboard=clip, clock=clock, timer_factory=FakeTimer, url_opener=opener)
+    a = Api(path, clipboard=clip, clock=clock, timer_factory=FakeTimer, url_opener=opener, store=STORE)
     assert a.unlock(PW)["ok"]
     return a
 
@@ -714,7 +716,7 @@ def test_save_service_custom_create_and_edit(lib):
     assert r2["ok"] and r2["service"]["aliases"] == ["uni"] and r2["service"]["icon_url"]
     assert len(lib.list_services()["services"]) == 68
     # persistiu
-    other = Api(lib._path, clipboard=FakeClipboard(), clock=FakeClock(), timer_factory=FakeTimer)
+    other = Api(lib._path, clipboard=FakeClipboard(), clock=FakeClock(), timer_factory=FakeTimer, store=STORE)
     assert other.unlock(PW)["ok"]
     assert other.lookup_service("uni")["match"]["name"] == "Portal"
 

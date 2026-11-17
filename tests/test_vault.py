@@ -8,6 +8,7 @@ from owlock.core import (
 )
 
 FAST = {"time_cost": 1, "memory_cost": 8192, "parallelism": 1}
+from tests._store import STORE  # noqa: E402
 PW = "senha-mestra-1"
 
 
@@ -18,7 +19,7 @@ def path(tmp_path):
 
 @pytest.fixture
 def vault(path):
-    return Vault.create(path, PW, kdf_params=FAST)
+    return Vault.create(path, PW, STORE, kdf_params=FAST)
 
 
 def _full_entry():
@@ -37,7 +38,7 @@ def _write(path, doc):
 
 def test_roundtrip(path, vault):
     e = vault.add(_full_entry())
-    again = Vault.open(path, PW)
+    again = Vault.open(path, PW, STORE)
     assert again.entries == [e]
 
 
@@ -45,19 +46,19 @@ def test_wrong_password_leaves_file_intact(path, vault):
     vault.add(_full_entry())
     before = path.read_bytes()
     with pytest.raises(WrongPasswordError):
-        Vault.open(path, "senha-errada-xx")
+        Vault.open(path, "senha-errada-xx", STORE)
     assert path.read_bytes() == before
 
 
 def test_tampered_ciphertext(path, vault):
     vault.add(_full_entry())
     doc = _doc(path)
-    ct = bytearray(base64.b64decode(doc["ciphertext"]))
+    ct = bytearray(base64.b64decode(doc["key"]["ciphertext"]))
     ct[0] ^= 1
-    doc["ciphertext"] = base64.b64encode(bytes(ct)).decode()
+    doc["key"]["ciphertext"] = base64.b64encode(bytes(ct)).decode()
     _write(path, doc)
     with pytest.raises(WrongPasswordError):
-        Vault.open(path, PW)
+        Vault.open(path, PW, STORE)
 
 
 def test_tampered_kdf_param_detected(path, vault):
@@ -65,21 +66,21 @@ def test_tampered_kdf_param_detected(path, vault):
     doc["kdf"]["memory_cost"] = 16384
     _write(path, doc)
     with pytest.raises((WrongPasswordError, VaultCorruptedError)):
-        Vault.open(path, PW)
+        Vault.open(path, PW, STORE)
 
 
 def test_broken_json(path, vault):
     path.write_text("{ nao e json")
     with pytest.raises(VaultCorruptedError):
-        Vault.open(path, PW)
+        Vault.open(path, PW, STORE)
 
 
 def test_unknown_version(path, vault):
     doc = _doc(path)
-    doc["version"] = 2
+    doc["version"] = 3
     _write(path, doc)
     with pytest.raises(VaultCorruptedError):
-        Vault.open(path, PW)
+        Vault.open(path, PW, STORE)
 
 
 def test_absurd_memory_cost_rejected_without_deriving(path, vault, monkeypatch):
@@ -93,33 +94,36 @@ def test_absurd_memory_cost_rejected_without_deriving(path, vault, monkeypatch):
     doc["kdf"]["memory_cost"] = 10**9
     _write(path, doc)
     with pytest.raises(VaultCorruptedError):
-        Vault.open(path, PW)
+        Vault.open(path, PW, STORE)
 
 
 def test_missing_fields_and_bad_base64(path, vault):
     doc = _doc(path)
-    del doc["ciphertext"]
+    del doc["key"]
     _write(path, doc)
     with pytest.raises(VaultCorruptedError):
-        Vault.open(path, PW)
+        Vault.open(path, PW, STORE)
     doc = _doc_with_bad_b64(path)
     _write(path, doc)
     with pytest.raises(VaultCorruptedError):
-        Vault.open(path, PW)
+        Vault.open(path, PW, STORE)
 
 
 def _doc_with_bad_b64(path):
     return {
-        "format": "owlock-vault", "version": 1,
+        "format": "owlock-vault", "version": 2, "vault_id": "a" * 32,
         "kdf": {"name": "argon2id", "salt": "!!!", **FAST},
-        "cipher": {"name": "aes-256-gcm", "nonce": "AAAA"},
-        "ciphertext": "AAAA",
+        "secret_key": {"id": "b" * 16},
+        "cipher": {"name": "aes-256-gcm"},
+        "key": {"nonce": "AAAA", "ciphertext": "AAAA"},
+        "meta": {"nonce": "AAAA", "ciphertext": "AAAA"},
+        "entries": [],
     }
 
 
 def test_open_missing_file(tmp_path):
     with pytest.raises(FileNotFoundError):
-        Vault.open(tmp_path / "nao-existe.vault", PW)
+        Vault.open(tmp_path / "nao-existe.vault", PW, STORE)
 
 
 def test_file_has_no_plaintext(path, vault):
@@ -130,17 +134,17 @@ def test_file_has_no_plaintext(path, vault):
 
 
 def test_nonce_changes_between_saves(path, vault):
-    n1 = _doc(path)["cipher"]["nonce"]
+    n1 = _doc(path)["key"]["nonce"]
     vault.save()
-    n2 = _doc(path)["cipher"]["nonce"]
+    n2 = _doc(path)["key"]["nonce"]
     assert n1 != n2
 
 
 def test_create_existing_and_short_password(path, vault, tmp_path):
     with pytest.raises(VaultExistsError):
-        Vault.create(path, PW, kdf_params=FAST)
+        Vault.create(path, PW, STORE, kdf_params=FAST)
     with pytest.raises(ValueError):
-        Vault.create(tmp_path / "outro.vault", "curta", kdf_params=FAST)
+        Vault.create(tmp_path / "outro.vault", "curta", STORE, kdf_params=FAST)
     assert not (tmp_path / "outro.vault").exists()
 
 
@@ -158,7 +162,7 @@ def test_update_changes_updated_at_keeps_created_at(path, vault):
     changed = Entry.from_dict({**e.to_dict(), "notes": "novo",
                                "created_at": "1999-01-01T00:00:00+00:00"})
     vault.update(changed)
-    got = Vault.open(path, PW).entries[0]
+    got = Vault.open(path, PW, STORE).entries[0]
     assert got.notes == "novo"
     assert got.created_at == "2000-01-01T00:00:00+00:00"
     assert got.updated_at != "2000-01-01T00:00:00+00:00"
@@ -167,7 +171,7 @@ def test_update_changes_updated_at_keeps_created_at(path, vault):
 def test_delete(path, vault):
     e = vault.add(_full_entry())
     vault.delete(e.id)
-    assert Vault.open(path, PW).entries == []
+    assert Vault.open(path, PW, STORE).entries == []
 
 
 def test_search(vault):
@@ -190,8 +194,8 @@ def test_change_master_password(path, vault):
     vault.change_master_password(PW, "nova-senha-123")
     assert _doc(path)["kdf"]["salt"] != salt_before
     with pytest.raises(WrongPasswordError):
-        Vault.open(path, PW)
-    assert len(Vault.open(path, "nova-senha-123").entries) == 1
+        Vault.open(path, PW, STORE)
+    assert len(Vault.open(path, "nova-senha-123", STORE).entries) == 1
 
 
 def test_backup_after_second_save(path, vault):
@@ -217,7 +221,7 @@ def test_add_failure_rolls_back(path, vault, monkeypatch):
         vault.add(Entry(service="Outro"))
     assert len(vault.entries) == 1
     monkeypatch.undo()
-    assert [e.service for e in Vault.open(path, PW).entries] == ["ServicoSecreto"]
+    assert [e.service for e in Vault.open(path, PW, STORE).entries] == ["ServicoSecreto"]
 
 
 def test_update_failure_rolls_back(path, vault, monkeypatch):
@@ -242,11 +246,11 @@ def test_change_master_failure_restores_key(path, vault, monkeypatch):
     with pytest.raises(OSError):
         vault.change_master_password(PW, "nova-senha-123")
     monkeypatch.undo()
-    assert len(Vault.open(path, PW).entries) == 1
+    assert len(Vault.open(path, PW, STORE).entries) == 1
     vault.save()
-    assert len(Vault.open(path, PW).entries) == 1
+    assert len(Vault.open(path, PW, STORE).entries) == 1
     with pytest.raises(WrongPasswordError):
-        Vault.open(path, "nova-senha-123")
+        Vault.open(path, "nova-senha-123", STORE)
 
 
 def test_no_tmp_left_after_failure(path, vault, monkeypatch):

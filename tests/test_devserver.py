@@ -9,6 +9,7 @@ from owlock.app.devserver import make_server
 from owlock.core import Vault
 
 FAST = {"time_cost": 1, "memory_cost": 8192, "parallelism": 1}
+from tests._store import STORE  # noqa: E402
 PW = "senha-mestra-1"
 
 
@@ -25,12 +26,12 @@ class Clip:
 @pytest.fixture
 def server(tmp_path):
     path = tmp_path / "c.vault"
-    Vault.create(path, PW, kdf_params=FAST)
+    Vault.create(path, PW, STORE, kdf_params=FAST)
     web = tmp_path / "web"
     web.mkdir()
     (web / "index.html").write_text("<h1>oi</h1>")
     (tmp_path / "segredo.txt").write_text("segredo")
-    srv = make_server(Api(path, clipboard=Clip()), 0, web_dir=web)
+    srv = make_server(Api(path, clipboard=Clip(), store=STORE), 0, web_dir=web)
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
     yield srv
@@ -63,7 +64,7 @@ def test_status_and_unlock(server):
     code, raw = request(server, "POST", "/api/unlock", {"args": ["errada-errada"]})
     assert json.loads(raw)["error"] == "wrong_password"
     code, raw = request(server, "POST", "/api/unlock", {"kwargs": {"password": PW}})
-    assert json.loads(raw) == {"ok": True}
+    assert json.loads(raw) == {"ok": True, "migrated": False}
     code, raw = request(server, "POST", "/api/status", {})
     assert json.loads(raw)["unlocked"] is True
 
@@ -99,7 +100,7 @@ def test_path_traversal_404(server, path):
 
 
 def test_missing_web_dir_404(tmp_path):
-    srv = make_server(Api(tmp_path / "c.vault", clipboard=Clip()), 0, web_dir=tmp_path / "nada")
+    srv = make_server(Api(tmp_path / "c.vault", clipboard=Clip(), store=STORE), 0, web_dir=tmp_path / "nada")
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
     try:
@@ -129,3 +130,34 @@ def test_same_origin_allowed(server):
 def test_foreign_host_header_403(server):
     code, _ = request(server, "POST", "/api/status", {}, {"Host": "evil.example"})
     assert code == 403
+
+
+def test_dev_store_is_a_folder_next_to_the_vault(tmp_path):
+    from owlock.app.devserver import dev_store
+
+    store = dev_store(tmp_path / "c.vault")
+    assert store.directory == tmp_path / "c.vault.keys"
+
+
+def test_dev_save_dialog_numbers_files_in_given_dir(tmp_path):
+    from owlock.app.devserver import make_save_dialog
+
+    dialog = make_save_dialog(tmp_path)
+    assert dialog("a.html") == str(tmp_path / "owlock-kit-1.html")
+    assert dialog("a.html") == str(tmp_path / "owlock-kit-2.html")
+    assert make_save_dialog().__call__("x").startswith("/tmp/owlock-kit-")
+
+
+def test_seed_vault_uses_file_store_next_to_it(tmp_path):
+    from owlock.app.devserver import dev_store, seed_vault
+    from owlock.core import crypto
+
+    path = tmp_path / "seed.vault"
+    orig = crypto.DEFAULT_KDF_PARAMS.copy()
+    crypto.DEFAULT_KDF_PARAMS.update(FAST)
+    try:
+        seed_vault(path)
+    finally:
+        crypto.DEFAULT_KDF_PARAMS.update(orig)
+    assert len(list((tmp_path / "seed.vault.keys").glob("*.key"))) == 1
+    assert len(Vault.open(path, "senha-de-teste-123", dev_store(path)).entries) == 6

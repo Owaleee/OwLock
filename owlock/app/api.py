@@ -7,15 +7,18 @@ Métodos públicos são expostos à interface; auxiliares começam com "_".
 from __future__ import annotations
 
 import dataclasses
+import html
 import re
 import threading
 import time
 import uuid
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
+from owlock import __version__
 from owlock.core import (
     AUTO_LOCK_OPTIONS,
     CLIPBOARD_OPTIONS,
@@ -24,11 +27,17 @@ from owlock.core import (
     CATEGORY_ICONS,
     Category,
     Entry,
+    InvalidSecretKeyError,
     MIN_MASTER_PASSWORD_LENGTH,
+    MigrationError,
+    SecretKeyRequiredError,
+    SecretKeyStore,
     Vault,
     VaultCorruptedError,
     VaultExistsError,
     WrongPasswordError,
+    WrongSecretKeyError,
+    default_store,
     generate_password,
 )
 from owlock.core.catalog import Catalog, Service, brand_icons, icon_url, normalize
@@ -91,6 +100,82 @@ def _normalize_url(raw: str) -> str | None:
     return url if _valid_http_url(url) else None
 
 
+_KIT_DEFAULT_NAME = "OwLock-Kit-de-emergencia.html"
+
+_KIT_CSS = """
+@page { size: A4; margin: 18mm; }
+* { box-sizing: border-box; }
+body { font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #111; background: #fff;
+       margin: 0; padding: 24px; line-height: 1.5; font-size: 14px; }
+.page { max-width: 170mm; margin: 0 auto; }
+.logo { font-size: 26px; font-weight: 700; letter-spacing: 0.5px; }
+.logo span { color: #0a7d5a; }
+h1 { font-size: 22px; margin: 6px 0 2px; }
+.date { color: #555; margin: 0 0 18px; }
+.box { border: 2px solid #111; border-radius: 10px; padding: 16px 18px; margin: 16px 0; }
+.label { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #444; margin: 0 0 6px; }
+.key { font-family: "Consolas", "Courier New", monospace; font-size: 24px; font-weight: 700;
+       letter-spacing: 1px; word-break: break-all; margin: 0; }
+.line { font-family: "Consolas", "Courier New", monospace; font-size: 16px; margin: 0; }
+.path { font-family: "Consolas", "Courier New", monospace; font-size: 13px; word-break: break-all; margin: 0; }
+h2 { font-size: 16px; margin: 22px 0 6px; }
+ol { padding-left: 20px; margin: 0; }
+li { margin-bottom: 6px; }
+.warn { border: 2px solid #b00020; background: #fff3f3; border-radius: 10px; padding: 12px 16px; margin-top: 20px;
+        color: #7a0016; font-weight: 600; }
+@media print { body { padding: 0; } }
+"""
+
+
+def _kit_html(secret_key: str, vault_id: str, vault_path: str, date_text: str) -> str:
+    """HTML autossuficiente do Kit de emergência (todos os valores passam por html.escape)."""
+    e = html.escape
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kit de emergência do OwLock</title>
+<style>{_KIT_CSS}</style>
+</head>
+<body>
+<div class="page">
+<div class="logo">Ow<span>Lock</span></div>
+<h1>Kit de emergência do OwLock</h1>
+<p class="date">Gerado em {e(date_text)}</p>
+
+<div class="box">
+<p class="label">Chave Secreta</p>
+<p class="key">{e(secret_key)}</p>
+</div>
+
+<div class="box">
+<p class="label">Senha mestra (escreva à mão)</p>
+<p class="line">Senha mestra: ______________________________</p>
+</div>
+
+<div class="box">
+<p class="label">Cofre</p>
+<p class="path">{e(vault_path)}</p>
+<p class="path">Identificador: {e(vault_id)}</p>
+</div>
+
+<h2>Como recuperar seu cofre</h2>
+<ol>
+<li>Instale o OwLock no computador novo e copie o arquivo do cofre para ele.</li>
+<li>Abra o OwLock e digite a senha mestra.</li>
+<li>Quando o OwLock pedir, digite a Chave Secreta acima. Maiúsculas, minúsculas, espaços e hífens não importam.</li>
+<li>Pronto: a Chave Secreta fica guardada no novo computador e não será pedida de novo.</li>
+</ol>
+
+<div class="warn">Guarde esta folha em um local seguro (por exemplo, em um cofre ou gaveta trancada).
+Nunca envie a Chave Secreta por mensagem, e-mail ou foto. Sem a Chave Secreta e a senha mestra, ninguém consegue abrir o cofre, nem nós.</div>
+</div>
+</body>
+</html>
+"""
+
+
 class _PyperclipClipboard:
     """Adaptador sobre pyperclip (importado só quando usado)."""
 
@@ -129,8 +214,15 @@ class Api:
         clear_after: int = 30,
         timer_factory: Callable[..., Any] = threading.Timer,
         url_opener: Callable[[str], Any] | None = None,
+        store: SecretKeyStore | None = None,
+        save_dialog: Callable[[str], str | None] | None = None,
+        kdf_params: dict[str, int] | None = None,
     ) -> None:
         self._path = Path(vault_path)
+        self._store_obj = store
+        self._save_dialog = save_dialog
+        self._kdf_params = dict(kdf_params) if kdf_params is not None else None
+        self._v1_backup: Path | None = None
         self._auto_lock = auto_lock_seconds
         self._clipboard = clipboard if clipboard is not None else _PyperclipClipboard()
         self._clock = clock
@@ -142,6 +234,12 @@ class Api:
         self._last_activity = 0.0
         self._timer: Any = None
         self._copied: str | None = None
+
+    @property
+    def _store(self) -> SecretKeyStore:
+        if self._store_obj is None:
+            self._store_obj = default_store()
+        return self._store_obj
 
     # ---- auxiliares (todos chamados com o lock já adquirido) ----
     def _seconds_left(self) -> int:
@@ -286,6 +384,19 @@ class Api:
         with self._lock:
             if self._vault is not None and self._expired():
                 self._do_lock()
+            format_version: int | None = None
+            secret_key_required = False
+            if self._path.exists():
+                try:
+                    head = Vault.peek(self._path)
+                    format_version = head["version"]
+                    if format_version == 2:
+                        try:
+                            secret_key_required = self._store.get(head["vault_id"]) is None
+                        except Exception:  # noqa: BLE001 - chaveiro indisponível
+                            secret_key_required = True
+                except (OSError, VaultCorruptedError):
+                    format_version = None
             return {
                 "ok": True,
                 "exists": self._path.exists(),
@@ -294,6 +405,10 @@ class Api:
                 "auto_lock_seconds": self._auto_lock,
                 "clipboard_clear_seconds": self._clear_after,
                 "seconds_left": self._seconds_left(),
+                "app_version": __version__,
+                "format_version": format_version,
+                "secret_key_required": secret_key_required,
+                "key_storage": self._store.description,
             }
 
     def create_vault(self, password: str, confirm: str) -> dict[str, Any]:
@@ -310,27 +425,50 @@ class Api:
             if self._path.exists():
                 return _error("exists", "Já existe um cofre neste caminho.")
             try:
-                vault = Vault.create(self._path, password)
+                vault = Vault.create(self._path, password, self._store, kdf_params=self._kdf_params)
             except VaultExistsError:
                 return _error("exists", "Já existe um cofre neste caminho.")
             except ValueError as exc:
                 return _error("password_too_short", str(exc))
             except OSError:
                 return _error("save_failed", "Não foi possível gravar o cofre.")
+            secret_key = vault.secret_key_formatted
+            vault.forget_secret_key_display()
             self._vault = vault
             self._apply_settings()
             self._last_activity = self._clock()
-            return {"ok": True}
+            return {"ok": True, "secret_key": secret_key}
 
-    def unlock(self, password: str) -> dict[str, Any]:
-        """Abre o cofre com a senha mestra."""
+    def unlock(self, password: str, secret_key: str | None = None) -> dict[str, Any]:
+        """Abre o cofre com a senha mestra (e a Chave Secreta, se este aparelho não a tiver)."""
         with self._lock:
+            if not isinstance(secret_key, str) or not secret_key.strip():
+                secret_key = None
             try:
-                vault = Vault.open(self._path, password if isinstance(password, str) else "")
+                vault = Vault.open(
+                    self._path,
+                    password if isinstance(password, str) else "",
+                    self._store,
+                    secret_key,
+                )
             except FileNotFoundError:
                 return _error("not_found", "Nenhum cofre encontrado neste caminho.")
             except WrongPasswordError:
                 return _error("wrong_password", "Senha mestra incorreta.")
+            except SecretKeyRequiredError:
+                return _error(
+                    "secret_key_required",
+                    "Este cofre foi criado em outro computador. Digite a Chave Secreta do seu Kit de emergência.",
+                )
+            except WrongSecretKeyError:
+                return _error("wrong_secret_key", "Chave Secreta incorreta para este cofre.")
+            except InvalidSecretKeyError:
+                return _error("invalid_secret_key", "Chave Secreta inválida: confira os caracteres.")
+            except MigrationError:
+                return _error(
+                    "migration_failed",
+                    "Não foi possível atualizar o cofre para o formato novo. Nada foi alterado.",
+                )
             except VaultCorruptedError:
                 bak = self._path.with_name(self._path.name + ".bak")
                 return _error(
@@ -339,10 +477,18 @@ class Api:
                 )
             except OSError:
                 return _error("open_failed", "Não foi possível ler o arquivo do cofre.")
+            result: dict[str, Any] = {"ok": True, "migrated": bool(vault.migrated)}
+            if vault.migrated:
+                self._v1_backup = vault.v1_backup_path
+                result["v1_backup_path"] = str(vault.v1_backup_path)
+                result["secret_key"] = vault.secret_key_formatted  # para a tela do Kit
+                vault.forget_secret_key_display()
+            if not vault.secret_key_persisted:
+                result["key_save_failed"] = True
             self._vault = vault
             self._apply_settings()
             self._last_activity = self._clock()
-            return {"ok": True}
+            return result
 
     def lock(self) -> dict[str, Any]:
         """Bloqueia o cofre."""
@@ -357,6 +503,79 @@ class Api:
             if err:
                 return err
             return {"ok": True, "seconds_left": self._seconds_left()}
+
+    # ---- Chave Secreta e Kit de emergência ----
+    def emergency_kit(self, password: str) -> dict[str, Any]:
+        """Revela a Chave Secreta (exige cofre aberto e a senha mestra)."""
+        with self._lock:
+            err = self._require()
+            if err:
+                return err
+            assert self._vault is not None
+            try:
+                secret = self._vault.reveal_secret_key(password if isinstance(password, str) else "")
+            except WrongPasswordError:
+                return _error("wrong_password", "Senha mestra incorreta.")
+            return {
+                "ok": True,
+                "secret_key": secret,
+                "vault_id": self._vault.vault_id,
+                "vault_path": str(self._path),
+                "key_storage": self._store.description,
+            }
+
+    def save_emergency_kit(self, password: str) -> dict[str, Any]:
+        """Grava o Kit de emergência (HTML para imprimir) no lugar escolhido pelo usuário."""
+        with self._lock:
+            err = self._require()
+            if err:
+                return err
+            assert self._vault is not None
+            try:
+                secret = self._vault.reveal_secret_key(password if isinstance(password, str) else "")
+            except WrongPasswordError:
+                return _error("wrong_password", "Senha mestra incorreta.")
+            if self._save_dialog is None:
+                return _error("save_failed", "Não foi possível abrir a janela para salvar.")
+            try:
+                chosen = self._save_dialog(_KIT_DEFAULT_NAME)
+            except Exception:  # noqa: BLE001 - janela indisponível
+                return _error("save_failed", "Não foi possível abrir a janela para salvar.")
+            if isinstance(chosen, (tuple, list)):
+                chosen = chosen[0] if chosen else None
+            if not chosen or not isinstance(chosen, (str, Path)):
+                return _error("cancelled", "Salvamento cancelado.")
+            target = Path(chosen)
+            if not target.suffix:
+                target = target.with_name(target.name + ".html")
+            content = _kit_html(
+                secret,
+                self._vault.vault_id,
+                str(self._path),
+                datetime.now().strftime("%d/%m/%Y"),
+            )
+            try:
+                target.write_bytes(content.encode("utf-8"))
+            except OSError:
+                return _error("save_failed", "Não foi possível gravar o arquivo do Kit.")
+            return {"ok": True, "path": str(target)}
+
+    def delete_v1_backup(self) -> dict[str, Any]:
+        """Apaga a cópia do cofre antigo criada pela migração desta sessão."""
+        with self._lock:
+            err = self._require()
+            if err:
+                return err
+            backup = self._v1_backup
+            if backup is None or not backup.is_file():
+                self._v1_backup = None
+                return _error("not_found", "Cópia do cofre antigo não encontrada.")
+            try:
+                backup.unlink()
+            except OSError:
+                return _error("delete_failed", "Não foi possível apagar a cópia do cofre antigo.")
+            self._v1_backup = None
+            return {"ok": True}
 
     # ---- contas ----
     def list_entries(
