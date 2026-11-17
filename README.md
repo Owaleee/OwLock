@@ -3,10 +3,14 @@
 # OwLock
 
 [![Testes](https://github.com/Owaleee/OwLock/actions/workflows/ci.yml/badge.svg)](https://github.com/Owaleee/OwLock/actions/workflows/ci.yml)
+[![Versão](https://img.shields.io/github/v/release/Owaleee/OwLock?label=vers%C3%A3o)](https://github.com/Owaleee/OwLock/releases/latest)
+[![Licença: MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-blue.svg)](LICENSE)
 
 Gerenciador de senhas local, offline e de código aberto, escrito em Python, com interface em HTML, CSS e JavaScript numa janela nativa.
 
 O OwLock guarda suas contas em um único arquivo criptografado, protegido por uma senha mestra. Nenhum dado sai do seu computador e o aplicativo não usa a rede.
+
+**[Baixar a versão mais recente](https://github.com/Owaleee/OwLock/releases/latest)** · [Roadmap](ROADMAP.md)
 
 ## Funcionalidades
 
@@ -135,17 +139,20 @@ owlock/
   __main__.py      # `owlock` ou `python -m owlock`: lê --vault e abre o aplicativo
   core/            # sem dependência de interface; reaproveitável em outras interfaces
     strength.py    # força da senha (0 a 4), sem dependências
-    models.py      # Entry (dataclass)
+    models.py      # Entry, Category (dataclasses), cores e ícones das categorias
+    catalog.py     # biblioteca de serviços: links de login, apelidos e ícones
+    data/          # services.json (67 serviços) e brand_icons.json
     crypto.py      # derivação de chave (Argon2id) + AES-256-GCM
     vault.py       # Vault: criar, abrir, CRUD, salvar (escrita atômica), trocar senha mestra
     generator.py   # gerador de senhas com `secrets`
     errors.py      # WrongPasswordError, VaultCorruptedError, VaultExistsError
+    (vault.py também guarda categorias, ajustes, histórico e serviços personalizados)
   app/
     api.py         # Api: única ponte entre a interface e o núcleo
     main.py        # abre a janela pywebview com a Api
     devserver.py   # SÓ desenvolvimento: serve a interface no navegador (127.0.0.1) com a mesma Api via HTTP
-  web/             # index.html, styles.css, app.js, bridge.js, fonts/
-packaging/         # ponto de entrada do executável (PyInstaller)
+  web/             # index.html, styles.css, app.js, bridge.js, fonts/, img/, icons/brands/
+packaging/         # executável (PyInstaller), ícone do app e script dos ícones de marcas
 tests/             # pytest: núcleo, Api, servidor de desenvolvimento e teste ponta a ponta (e2e)
 .github/workflows/ # CI (Linux e Windows) e geração do OwLock.exe nas releases
 ```
@@ -199,15 +206,13 @@ O arquivo fica em `dist/`. Para publicar uma nova versão, crie uma release no G
 
 ## Roteiro
 
-Próximos passos previstos:
+Versões entregues e próximos passos estão no [ROADMAP.md](ROADMAP.md). Em resumo:
 
-- Aplicativo de celular que lê o mesmo arquivo de cofre.
-- Sincronização entre dispositivos.
-- Geração de códigos TOTP.
-- Importação e exportação em CSV.
-- Categorias para organizar as contas.
-- Preencher login e senha no site com uma extensão de navegador.
-- Formato de cofre v2 com Chave Secreta (para sincronizar com segurança entre computador e celular).
+- **v0.5:** cofre v2 com Chave Secreta e Kit de emergência.
+- **v0.6:** senhas repetidas e antigas, bloqueio ao minimizar, backups com histórico, favoritas.
+- **v0.7:** atalhos de teclado, importar/exportar CSV, códigos 2FA opcionais.
+- **v0.8:** extensão de navegador para preencher login e senha.
+- **v1.0:** aplicativo de celular com pareamento por QR code e sincronização.
 
 ## Créditos
 
