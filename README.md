@@ -221,7 +221,7 @@ pyinstaller --noconfirm --onefile --windowed --name OwLock \
 
 No Windows, o `--add-data` usa `;` como separador: `--add-data "owlock/web;owlock/web"`, como no workflow de release.
 
-O arquivo fica em `dist/`. Para publicar uma nova versão, crie uma release no GitHub (aba **Releases** > **Draft a new release**, com uma tag como `v0.2.0`): o workflow gera o `OwLock.exe` no Windows e o anexa à release automaticamente.
+O arquivo fica em `dist/`. Para publicar uma nova versão, atualize a versão em `owlock/__init__.py` e `pyproject.toml`, escreva as notas em `docs/releases/vX.Y.Z.md` (a primeira linha é o título) e envie a tag (`git tag vX.Y.Z && git push origin vX.Y.Z`): o workflow roda os testes, gera o `OwLock.exe` no Windows e cria a release com os arquivos anexados.
 
 ## Roteiro
 

@@ -1,8 +1,12 @@
 name: Release (executável Windows)
 
-# Ao publicar uma Release no GitHub (aba Releases > Draft a new release),
-# gera o OwLock.exe no Windows e o anexa à própria release.
+# Gera o OwLock.exe no Windows e publica a release:
+# - ao enviar uma tag de versão (ex.: git tag v1.0.0 && git push origin v1.0.0), cria a release
+#   com as notas de docs/releases/<tag>.md e anexa os arquivos;
+# - ao publicar uma Release pela aba Releases do GitHub, anexa os arquivos a ela.
 on:
+  push:
+    tags: ["v*"]
   release:
     types: [published]
 
@@ -21,15 +25,30 @@ jobs:
         run: pip install -e ".[dev]" "pyinstaller>=6"
       - name: Testes
         run: pytest -q
+      - name: Conferir a versão
+        shell: bash
+        run: |
+          app=$(python -c "import owlock; print(owlock.__version__)")
+          test "v$app" = "$GITHUB_REF_NAME" || { echo "A tag $GITHUB_REF_NAME não confere com a versão $app"; exit 1; }
       - name: Gerar executável
         run: >
           pyinstaller --noconfirm --onefile --windowed --name OwLock
           --icon packaging/owlock.ico --add-data "owlock/web;owlock/web" --add-data "owlock/app/owlock.ico;owlock/app" --add-data "owlock/core/data;owlock/core/data" --collect-all webview --collect-all pystray --collect-submodules keyring --paths .
           packaging/run_owlock.py
-      - name: Anexar à release
+      - name: Hash SHA-256
+        shell: bash
+        run: (cd dist && sha256sum OwLock.exe | tee OwLock.exe.sha256)
+      - name: Publicar na release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          (cd dist && sha256sum OwLock.exe | tee OwLock.exe.sha256)
-          gh release upload "$GITHUB_REF_NAME" dist/OwLock.exe dist/OwLock.exe.sha256 --clobber
+          files="dist/OwLock.exe dist/OwLock.exe.sha256"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" $files --clobber
+          else
+            notes="docs/releases/$GITHUB_REF_NAME.md"
+            title=$(head -n 1 "$notes" | sed 's/^# *//')
+            tail -n +2 "$notes" > /tmp/notes.md
+            gh release create "$GITHUB_REF_NAME" $files --title "$title" --notes-file /tmp/notes.md --verify-tag
+          fi
