@@ -21,6 +21,8 @@ const ICONS = {
   tag: [['path', { d: 'M3 3h8.2a2 2 0 0 1 1.4.6l8 8a2 2 0 0 1 0 2.8l-6.2 6.2a2 2 0 0 1-2.8 0l-8-8A2 2 0 0 1 3 11.2V3z' }], ['circle', { cx: 7.5, cy: 7.5, r: 1.3 }]],
   external: [['path', { d: 'M14 4h6v6M20 4l-9 9M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4' }]],
   check: [['path', { d: 'M5 12.5l4.5 4.5L19 7.5' }]],
+  shieldKey: [['path', { d: 'M12 3l7.5 3v5.2c0 4.6-3.1 8.1-7.5 9.8-4.4-1.7-7.5-5.2-7.5-9.8V6L12 3z' }], ['circle', { cx: 12, cy: 10, r: 2 }], ['path', { d: 'M12 12v4M12 14.5h1.8' }]],
+  download: [['path', { d: 'M12 4v11M7.5 11l4.5 4.5 4.5-4.5M5 20h14' }]],
   link: [['path', { d: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1' }]],
   none: [['circle', { cx: 12, cy: 12, r: 8 }], ['path', { d: 'M6.3 17.7L17.7 6.3' }]],
   user: [['circle', { cx: 12, cy: 8, r: 4 }], ['path', { d: 'M4 21a8 8 0 0 1 16 0' }]],
@@ -143,8 +145,10 @@ let tickTimer = null;
 let revealTimer = null;
 let copyTimer = null;
 let histTimer = null;
+let kitWipe = null; // descarta chave e senha da tela do Kit de emergência
 
 function wipeState() {
+  if (kitWipe) kitWipe();
   clearInterval(tickTimer);
   clearTimeout(revealTimer);
   clearTimeout(copyTimer);
@@ -340,30 +344,68 @@ async function fetchStatus() {
   return r;
 }
 
+/* Campo da Chave Secreta: fonte mono, maiúsculas automáticas (também ao colar). */
+function secretKeyField() {
+  const input = h('input', {
+    class: 'input mono', id: 'unlock-secret', type: 'text', autocomplete: 'off', spellcheck: 'false', autocapitalize: 'characters',
+    placeholder: 'OW2-XXXXX-XXXXX-…', 'aria-describedby': 'unlock-secret-help',
+  });
+  input.addEventListener('input', () => {
+    const start = input.selectionStart;
+    const end = input.selectionEnd;
+    const upper = input.value.toUpperCase();
+    if (upper !== input.value) {
+      input.value = upper;
+      input.setSelectionRange(start, end);
+    }
+  });
+  const el = h('div', { class: 'field', id: 'unlock-secret-field' },
+    h('label', { for: 'unlock-secret', text: 'Chave Secreta' }), input,
+    h('p', { class: 'hint', id: 'unlock-secret-help', text: 'Este cofre foi criado em outro computador. Digite a Chave Secreta do seu Kit de emergência.' }));
+  return { input, el };
+}
+
 function showUnlock(notice = '') {
   const pw = passwordField({ id: 'unlock-password', label: 'Senha mestra', autofocus: true });
+  const secret = secretKeyField();
+  secret.el.hidden = !state.status?.secret_key_required;
   const error = h('p', { class: 'msg error', id: 'unlock-error', role: 'alert' });
   const submit = h('button', { class: 'btn btn-primary wide', id: 'unlock-submit', type: 'submit', text: 'Abrir cofre' });
 
-  const form = h('form', { novalidate: '' }, pw.el, error, submit);
+  const form = h('form', { novalidate: '' }, pw.el, secret.el, error, submit);
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (submit.disabled) return;
     const typed = pw.input.value;
+    const typedSecret = secret.el.hidden ? '' : secret.input.value.trim();
     error.textContent = '';
     submit.disabled = true;
     submit.textContent = 'Abrindo...';
-    const r = await call('unlock', typed);
+    const r = await call('unlock', typed, typedSecret || null);
     if (r.ok) {
       pw.input.value = '';
+      secret.input.value = '';
+      if (r.migrated) {
+        await showMigrationKit(typed, r);
+        return;
+      }
       await showEntry();
       return;
     }
     submit.disabled = false;
     submit.textContent = 'Abrir cofre';
-    error.textContent = apiMessage(r, 'Não foi possível abrir o cofre.');
-    pw.input.select();
-    pw.input.focus();
+    const secretProblem = ['wrong_secret_key', 'invalid_secret_key', 'secret_key_required'].includes(r.error);
+    if (r.error === 'secret_key_required') secret.el.hidden = false;
+    error.textContent = r.error === 'wrong_secret_key'
+      ? 'Chave Secreta não confere com este cofre.'
+      : apiMessage(r, 'Não foi possível abrir o cofre.');
+    if (secretProblem) {
+      secret.input.select();
+      secret.input.focus();
+    } else {
+      pw.input.select();
+      pw.input.focus();
+    }
   });
 
   const card = h('div', { class: 'auth-card ow-in' },
@@ -416,6 +458,10 @@ function showCreate() {
     }
     pw.input.value = '';
     confirm.input.value = '';
+    if (r.secret_key) {
+      showKitScreen({ secretKey: r.secret_key, password: first });
+      return;
+    }
     const status = await fetchStatus();
     if (!status) return;
     if (status.unlocked) {
@@ -436,6 +482,247 @@ function showCreate() {
 }
 
 /* ======================================================================
+   Kit de emergência (Chave Secreta): tela cheia depois de criar/migrar o cofre
+   ====================================================================== */
+
+/* Anel de contagem regressiva dentro de um botão de cópia. */
+function countdownRing(seconds) {
+  const progress = svg('circle', { class: 'ow-count', cx: 20, cy: 20, r: 18, fill: 'none', stroke: '#1FB894', 'stroke-width': 4, 'stroke-linecap': 'round' });
+  progress.style.setProperty('animation-duration', `${seconds}s`);
+  const ring = svg('svg', { class: 'ring', width: 22, height: 22, viewBox: '0 0 40 40', 'aria-hidden': 'true' });
+  ring.append(svg('circle', { cx: 20, cy: 20, r: 18, fill: 'none', stroke: 'rgba(255,255,255,.16)', 'stroke-width': 4 }), progress);
+  return ring;
+}
+
+/* Cartão de vidro com a Chave em grupos (OW2-XXXXX-XXXXX-...). */
+function kitKeyCard(secretKey) {
+  const parts = secretKey.split('-');
+  // cada grupo leva o hífen junto, para a quebra de linha nunca deixá-lo sozinho
+  const piece = (part, index) => [
+    h('span', { class: 'kit-grp', text: part }),
+    index < parts.length - 1 ? h('span', { class: 'kit-dash', 'aria-hidden': 'true', text: '-' }) : null,
+  ];
+  const nodes = parts.slice(0, -2).map((part, index) => h('span', { class: 'kit-unit' }, piece(part, index)));
+  // os dois últimos grupos (final do corpo + verificação) ficam juntos na mesma linha
+  nodes.push(h('span', { class: 'kit-unit' }, piece(parts[parts.length - 2], parts.length - 2), piece(parts[parts.length - 1], parts.length - 1)));
+  return h('div', { class: 'kit-key glass', id: 'kit-key', role: 'group', 'aria-label': 'Chave Secreta' }, nodes);
+}
+
+/* Botões "Copiar chave" e "Salvar Kit". As funções devolvem o segredo/senha só no momento do uso. */
+function kitActions({ getSecret, getPassword, idPrefix }) {
+  const status = h('p', { class: 'msg kit-status', id: `${idPrefix}-status`, role: 'status' });
+  const label = [icon('copy', 18, 2.2), 'Copiar chave'];
+  const copyButton = h('button', { class: 'btn btn-ghost', id: `${idPrefix}-copy`, type: 'button' }, ...label);
+  let copyTimerId = null;
+  copyButton.addEventListener('click', async () => {
+    const secret = getSecret();
+    if (!secret) return;
+    const r = await call('copy_text', secret);
+    if (!r.ok) {
+      if (r.error !== 'locked') toast(apiMessage(r, 'Não foi possível copiar.'), 'warn');
+      return;
+    }
+    const seconds = r.clear_in || 30;
+    copyButton.replaceChildren(countdownRing(seconds), `Copiada · limpa em ${seconds} s`);
+    clearTimeout(copyTimerId);
+    copyTimerId = setTimeout(() => {
+      if (copyButton.isConnected) copyButton.replaceChildren(...label.map((item) => (typeof item === 'string' ? item : icon('copy', 18, 2.2))));
+    }, seconds * 1000);
+  });
+
+  const saveButton = h('button', { class: 'btn btn-primary', id: `${idPrefix}-save`, type: 'button' }, icon('download', 18, 2.2), 'Salvar Kit');
+  saveButton.addEventListener('click', async () => {
+    const password = getPassword();
+    if (!password) return;
+    saveButton.disabled = true;
+    status.className = 'msg kit-status';
+    status.textContent = '';
+    const r = await call('save_emergency_kit', password);
+    saveButton.disabled = false;
+    if (r.ok) {
+      status.className = 'msg kit-status ok';
+      status.textContent = r.path ? `Kit salvo em ${r.path}` : 'Kit salvo.';
+    } else if (r.error === 'cancelled') {
+      status.textContent = '';
+    } else if (r.error !== 'locked') {
+      status.className = 'msg kit-status error';
+      status.textContent = apiMessage(r, 'Não foi possível salvar o Kit.');
+    }
+  });
+  return { row: h('div', { class: 'btn-row kit-actions' }, saveButton, copyButton), status };
+}
+
+const KIT_LEAD = 'Sem a Chave Secreta e a senha mestra, ninguém abre o cofre — nem você em outro computador. Salve o Kit, imprima e guarde longe do arquivo do cofre.';
+
+/* Depois de uma migração a Api devolve a Chave; se não vier, pede com a senha que acabou de ser digitada. */
+async function showMigrationKit(password, response) {
+  let secretKey = response.secret_key;
+  if (!secretKey) {
+    const kit = await call('emergency_kit', password);
+    secretKey = kit.ok ? kit.secret_key : '';
+  }
+  if (!secretKey) {
+    await showEntry();
+    return;
+  }
+  showKitScreen({ secretKey, password, migrated: true, backupPath: response.v1_backup_path || '' });
+}
+
+function showKitScreen({ secretKey, password, migrated = false, backupPath = '' }) {
+  // a chave e a senha só existem nestas variáveis, até sair da tela
+  let secret = secretKey;
+  let master = password;
+  const keepAlive = setInterval(() => { call('touch'); }, 60000);
+  const wipe = () => {
+    clearInterval(keepAlive);
+    secret = null;
+    master = null;
+    kitWipe = null;
+    root.replaceChildren();
+  };
+  kitWipe = wipe;
+
+  const actions = kitActions({ getSecret: () => secret, getPassword: () => master, idPrefix: 'kit' });
+  const saved = h('input', { class: 'ios-switch', type: 'checkbox', role: 'switch', id: 'kit-saved' });
+  const proceed = h('button', { class: 'btn btn-primary wide', id: 'kit-continue', type: 'button', disabled: true }, 'Continuar');
+  saved.addEventListener('change', () => {
+    proceed.disabled = !saved.checked;
+  });
+  proceed.addEventListener('click', async () => {
+    if (proceed.disabled) return;
+    wipe();
+    await showEntry();
+  });
+
+  const blocks = [
+    h('div', { class: 'kit-badge', 'aria-hidden': 'true' }, icon('shieldKey', 34, 1.8)),
+    h('h1', { class: 'kit-title', text: 'Guarde seu Kit de emergência' }),
+    migrated ? h('p', { class: 'notice kit-migrated', id: 'kit-migrated', text: 'Seu cofre foi atualizado para o formato v2, mais seguro.' }) : null,
+    h('p', { class: 'kit-lead', text: KIT_LEAD }),
+    kitKeyCard(secret),
+    actions.row,
+    actions.status,
+  ];
+  if (migrated && backupPath) blocks.push(oldCopyBlock(backupPath));
+  blocks.push(
+    h('div', { class: 'group' },
+      h('label', { class: 'group-row switch-row', for: 'kit-saved' }, h('span', { class: 'row-k grow', text: 'Guardei meu Kit em local seguro' }), saved)),
+    proceed);
+
+  root.replaceChildren(h('div', { class: 'kit-screen' }, h('div', { class: 'kit-col ow-in' }, blocks)));
+  proceed.disabled = true;
+  actions.row.querySelector('button')?.focus();
+}
+
+/* Cópia do cofre antigo (formato v1) deixada pela migração. */
+function oldCopyBlock(backupPath) {
+  const box = h('div', { class: 'group kit-old', id: 'kit-old' });
+  const status = h('p', { class: 'msg', id: 'kit-old-status', role: 'status' });
+  const button = h('button', { class: 'btn btn-ghost danger', id: 'kit-old-delete', type: 'button' }, 'Apagar cópia antiga');
+  button.addEventListener('click', () => confirmDeleteOldCopy(async () => {
+    const r = await call('delete_v1_backup');
+    if (r.ok || r.error === 'not_found') {
+      box.replaceChildren(h('div', { class: 'group-row stacked' },
+        h('span', { class: 'row-k', text: 'Cópia do cofre antigo' }),
+        h('span', { class: 'row-v', id: 'kit-old-done', text: 'A cópia antiga foi apagada.' })));
+      return null;
+    }
+    return apiMessage(r, 'Não foi possível apagar a cópia antiga.');
+  }, status));
+  box.append(
+    h('div', { class: 'group-row stacked' },
+      h('span', { class: 'row-k', text: 'Cópia do cofre antigo' }),
+      h('span', { class: 'row-v path', id: 'kit-old-path', text: backupPath }),
+      h('span', { class: 'hint kit-old-hint', text: 'Ela ainda abre só com a senha mestra, sem a Chave Secreta. Apague depois de guardar seu Kit.' })),
+    h('div', { class: 'group-row' }, status, h('span', { class: 'grow-spacer' }), button));
+  return box;
+}
+
+function confirmDeleteOldCopy(run, statusEl) {
+  const error = h('p', { class: 'msg error', role: 'alert' });
+  const confirmButton = h('button', { class: 'btn btn-primary danger', id: 'confirm-delete-old', type: 'button', 'data-autofocus': '' }, 'Apagar');
+  confirmButton.addEventListener('click', async () => {
+    confirmButton.disabled = true;
+    const problem = await run();
+    if (problem) {
+      confirmButton.disabled = false;
+      error.textContent = problem;
+      return;
+    }
+    closeModal();
+    toast('Cópia antiga apagada');
+  });
+  const card = h('div', { class: 'modal narrow', 'aria-labelledby': 'delete-old-title' },
+    h('h2', { id: 'delete-old-title', text: 'Apagar a cópia antiga?' }),
+    h('p', { class: 'lead', text: 'A cópia antiga ainda abre só com a senha mestra. Apague depois de guardar seu Kit.' }),
+    error,
+    h('div', { class: 'modal-actions' },
+      h('button', { class: 'btn btn-ghost', id: 'cancel-delete-old', type: 'button', onClick: closeModal }, 'Cancelar'),
+      confirmButton));
+  openModal(card, { dismissOnBackdrop: true });
+  if (statusEl) statusEl.textContent = '';
+}
+
+/* Sheet dos Ajustes: pede a senha mestra e mostra a Chave; some ao fechar. */
+function openKitSheet() {
+  let secret = null;
+  let master = null;
+  const pw = passwordField({ id: 'kit-password', label: 'Senha mestra', autofocus: true });
+  const error = h('p', { class: 'msg error', id: 'kit-sheet-error', role: 'alert' });
+  const submit = h('button', { class: 'btn btn-primary', id: 'kit-sheet-submit', type: 'submit' }, 'Mostrar Kit');
+  const body = h('div', { class: 'kit-sheet-body' });
+  const form = h('form', { novalidate: '' },
+    h('p', { class: 'lead', text: 'Digite a senha mestra para ver a Chave Secreta deste cofre.' }),
+    pw.el, error,
+    h('div', { class: 'modal-actions' },
+      h('button', { class: 'btn btn-ghost', id: 'kit-sheet-cancel', type: 'button', onClick: closeModal }, 'Cancelar'),
+      submit));
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (submit.disabled) return;
+    error.textContent = '';
+    submit.disabled = true;
+    const typed = pw.input.value;
+    const r = await call('emergency_kit', typed);
+    pw.input.value = '';
+    if (!r.ok) {
+      submit.disabled = false;
+      if (r.error === 'locked') return;
+      error.textContent = r.error === 'wrong_password' ? apiMessage(r, 'Senha mestra incorreta.') : apiMessage(r, 'Não foi possível abrir o Kit.');
+      pw.input.focus();
+      return;
+    }
+    secret = r.secret_key;
+    master = typed;
+    const actions = kitActions({ getSecret: () => secret, getPassword: () => master, idPrefix: 'kit-sheet' });
+    body.replaceChildren(
+      h('p', { class: 'lead', text: 'Guarde esta chave com o Kit impresso. Sem ela e sem a senha mestra, ninguém abre o cofre em outro computador.' }),
+      kitKeyCard(secret),
+      h('div', { class: 'group' },
+        h('div', { class: 'group-row' }, h('span', { class: 'row-k', text: 'Guardada em' }), h('span', { class: 'row-v', id: 'kit-sheet-storage', text: r.key_storage || '' })),
+        r.vault_path ? h('div', { class: 'group-row stacked' }, h('span', { class: 'row-k', text: 'Arquivo do cofre' }), h('span', { class: 'row-v path', text: r.vault_path })) : null),
+      actions.row,
+      actions.status,
+      h('div', { class: 'modal-actions' }, h('button', { class: 'btn btn-ghost', id: 'kit-sheet-close', type: 'button', 'data-autofocus': '', onClick: closeModal }, 'Fechar')));
+    form.hidden = true;
+    body.querySelector('[data-autofocus]')?.focus();
+  });
+
+  const card = h('div', { class: 'modal', 'aria-labelledby': 'kit-sheet-title' },
+    h('div', { class: 'modal-head' },
+      h('h2', { id: 'kit-sheet-title', text: 'Kit de emergência' }),
+      h('button', { class: 'btn btn-icon', type: 'button', 'aria-label': 'Fechar', onClick: closeModal }, icon('close', 18))),
+    form, body);
+  openModal(card, {
+    onClose: () => {
+      secret = null;
+      master = null;
+      body.replaceChildren();
+    },
+  });
+}
+
+/* ======================================================================
    Bloqueio, contagem regressiva e atividade
    ====================================================================== */
 
@@ -448,6 +735,11 @@ async function lockNow(notice = '') {
 }
 
 window.addEventListener('owlock:locked', () => {
+  if (kitWipe) {
+    kitWipe();
+    showEntry('O cofre foi bloqueado.');
+    return;
+  }
   lockNow('O cofre foi bloqueado.');
 });
 
@@ -2033,11 +2325,23 @@ function buildSettings() {
           h('span', { class: 'chev', 'aria-hidden': 'true' }, icon('chevron', 16, 2.4))))),
     ui.protection,
     h('div', { class: 'settings-stack ow-in' },
+      h('h2', { class: 'group-title', text: 'Chave Secreta e Kit de emergência' }),
+      h('div', { class: 'group' },
+        h('div', { class: 'group-row', id: 'key-storage-row' },
+          h('span', { class: 'row-k', text: 'Guardada em' }),
+          h('span', { class: 'row-v', id: 'key-storage', text: state.status?.key_storage || 'Não disponível' })),
+        h('button', { class: 'btn group-row cat-row', id: 'open-kit', type: 'button', onClick: openKitSheet },
+          h('span', { class: 'cat-tile mint', 'aria-hidden': 'true' }, icon('shieldKey', 18)),
+          h('span', { class: 'row-k grow', text: 'Ver Kit de emergência' }),
+          h('span', { class: 'chev', 'aria-hidden': 'true' }, icon('chevron', 16, 2.4)))),
+      h('p', { class: 'hint', text: 'A Chave Secreta fica neste computador e protege o arquivo do cofre se ele sair daqui. Para abrir o cofre em outro computador você precisa dela e da senha mestra.' })),
+    h('div', { class: 'settings-stack ow-in' },
       h('h2', { class: 'group-title', text: 'Cofre' }),
       h('div', { class: 'group' },
         h('div', { class: 'group-row stacked' },
           h('span', { class: 'row-k', text: 'Arquivo do cofre' }),
-          h('span', { class: 'row-v path', id: 'vault-path', text: state.status?.vault_path || '' })))));
+          h('span', { class: 'row-v path', id: 'vault-path', text: state.status?.vault_path || '' })))),
+    state.status?.app_version ? h('p', { class: 'app-version', id: 'app-version', text: `OwLock v${state.status.app_version}` }) : null);
   current.input.focus();
 }
 

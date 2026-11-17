@@ -1,4 +1,5 @@
 // Teste de fumaça ponta a ponta: interface + devserver, com Chrome headless.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import puppeteer from 'puppeteer-core';
 
@@ -6,6 +7,10 @@ const BASE = process.env.OWLOCK_URL || 'http://127.0.0.1:8765';
 const CHROME = process.env.CHROME_PATH || '/usr/bin/google-chrome';
 const PASSWORD = process.env.OWLOCK_PASSWORD || 'senha-de-teste-123';
 const SHOTS = process.env.OWLOCK_SHOTS || '/tmp/owlock-shots';
+const BASE2 = process.env.OWLOCK_URL2 || 'http://127.0.0.1:8766';
+const KEYS2 = process.env.OWLOCK_KEYS2 || '/tmp/owlock-e2e2.vault.keys';
+const PASSWORD2 = 'kit-de-teste-456';
+const KEY_FORMAT = /^OW2-[A-Z2-7]{5}-[A-Z2-7]{5}-[A-Z2-7]{5}-[A-Z2-7]{5}-[A-Z2-7]{6}-[A-Z2-7]{2}$/;
 const TIMEOUT = 15000;
 
 fs.mkdirSync(SHOTS, { recursive: true });
@@ -94,6 +99,105 @@ async function chooseInForm(page, name) {
     return false;
   }, name);
   if (!ok) fail(`categoria "${name}" não está no formulário`);
+}
+
+// Segundo cenário: cofre inexistente -> criar -> Kit de emergência.
+async function createScenario(browser) {
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1280, height: 800 });
+  page.on('pageerror', (error) => problems.push(`erro de página (criação): ${error.message}`));
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') problems.push(`console (criação): ${msg.text()}`);
+  });
+  page.setDefaultTimeout(TIMEOUT);
+  const startedAt = Date.now();
+
+  await page.goto(BASE2, { waitUntil: 'load' });
+  await page.waitForSelector('#create-password');
+  log('cenário 2: cofre inexistente mostra a criação');
+  await page.type('#create-password', PASSWORD2);
+  await page.type('#create-confirm', PASSWORD2);
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('#kit-key');
+  const key = await page.$eval('#kit-key', (el) => el.textContent);
+  if (!KEY_FORMAT.test(key)) fail(`a Chave do Kit deveria ter o formato OW2-…: ${key}`);
+  if (!(await page.$eval('#kit-continue', (el) => el.disabled))) fail('Continuar deveria começar desabilitado');
+  log(`tela do Kit aparece com a Chave ${key.slice(0, 9)}…`);
+  await shot(page, '27-kit');
+
+  await page.click('#kit-copy');
+  await page.waitForFunction(() => document.querySelector('#kit-copy .ow-count')
+    || [...document.querySelectorAll('.toast')].some((t) => /transfer/.test(t.textContent)));
+  log('Copiar chave mostra o anel de contagem (ou o aviso, sem área de transferência)');
+
+  await page.click('#kit-save');
+  await page.waitForFunction(() => /Kit salvo/.test(document.querySelector('#kit-status')?.textContent || ''));
+  const savedPath = await page.$eval('#kit-status', (el) => el.textContent.replace(/^Kit salvo em /, '').trim());
+  const kitFiles = fs.readdirSync('/tmp').filter((name) => /^owlock-kit-.*\.html$/.test(name))
+    .map((name) => `/tmp/${name}`).filter((file) => fs.statSync(file).mtimeMs >= startedAt - 2000);
+  if (!kitFiles.length) fail(`o devserver deveria gravar /tmp/owlock-kit-*.html (caminho informado: ${savedPath})`);
+  const html = fs.readFileSync(kitFiles[kitFiles.length - 1], 'utf8');
+  if (!html.includes(key)) fail('o arquivo do Kit deveria conter a Chave Secreta');
+  log(`Salvar Kit gravou ${kitFiles[kitFiles.length - 1]}`);
+
+  await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2 });
+  await sleep(300);
+  await shot(page, '28-celular-kit');
+  await page.setViewport({ width: 1280, height: 800 });
+  await sleep(300);
+
+  await page.click('#kit-saved');
+  await page.waitForFunction(() => !document.querySelector('#kit-continue').disabled);
+  log('o interruptor "Guardei meu Kit" habilita Continuar');
+  await page.click('#kit-continue');
+  await page.waitForSelector('#new-entry');
+  await page.waitForSelector('#detail-empty');
+  if ((await page.evaluate(() => document.body.textContent)).includes(key)) fail('a Chave ficou no DOM depois de sair da tela do Kit');
+  if (await page.$('#kit-key')) fail('a tela do Kit deveria ter saído');
+  log('Continuar entra no cofre vazio e a Chave some da tela');
+
+  await page.click('#nav-lock');
+  await page.waitForSelector('#unlock-password');
+  if (!(await page.$eval('#unlock-secret-field', (el) => el.hidden))) fail('com a chave neste computador o campo Chave Secreta deveria ficar escondido');
+  await page.type('#unlock-password', PASSWORD2);
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('#new-entry');
+  log('novo cofre desbloqueia só com a senha (Chave guardada neste computador)');
+
+  // "novo computador": apaga a pasta de chaves do cofre e tenta abrir de novo
+  await page.click('#nav-lock');
+  await page.waitForSelector('#unlock-password');
+  fs.rmSync(KEYS2, { recursive: true, force: true });
+  await page.goto(BASE2, { waitUntil: 'load' });
+  await page.waitForSelector('#unlock-secret-field');
+  if (await page.$eval('#unlock-secret-field', (el) => el.hidden)) fail('sem a Chave neste computador o campo Chave Secreta deveria aparecer');
+  log('sem a Chave guardada, o desbloqueio mostra o campo "Chave Secreta"');
+  await shot(page, '29-desbloqueio-chave');
+  await page.type('#unlock-password', PASSWORD2);
+  await page.type('#unlock-secret', 'abc');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.querySelector('#unlock-error')?.textContent.length > 0);
+  log(`chave malformada mostra erro: "${await page.$eval('#unlock-error', (el) => el.textContent)}"`);
+
+  const body = Array.from(crypto.randomBytes(26), (b) => 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'[b % 32]).join('');
+  const digest = crypto.createHash('sha256').update(body).digest();
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const check = alphabet[digest[0] >> 3] + alphabet[((digest[0] & 7) << 2) | (digest[1] >> 6)];
+  const wrong = `OW2-${[0, 5, 10, 15].map((i) => body.slice(i, i + 5)).join('-')}-${body.slice(20)}-${check}`;
+  await page.click('#unlock-secret', { clickCount: 3 });
+  await page.type('#unlock-secret', wrong);
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => /confere/.test(document.querySelector('#unlock-error')?.textContent || ''));
+  log('Chave bem formada mas de outro cofre: "Chave Secreta não confere com este cofre."');
+
+  await page.click('#unlock-secret', { clickCount: 3 });
+  await page.type('#unlock-secret', key.toLowerCase());
+  const typedValue = await page.$eval('#unlock-secret', (el) => el.value);
+  if (typedValue !== key) fail(`maiúsculas automáticas: esperava ${key}, veio ${typedValue}`);
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('#new-entry');
+  log('a Chave certa (digitada em minúsculas) abre o cofre e passa a ficar guardada de novo');
+  await page.close();
 }
 
 async function main() {
@@ -628,6 +732,33 @@ async function main() {
     await page.waitForSelector('#vault-path');
     await shot(page, '06-ajustes');
 
+    // Chave Secreta e Kit de emergência nos Ajustes
+    const storage = await page.$eval('#key-storage', (el) => el.textContent.trim());
+    if (!storage) fail('"Guardada em" deveria mostrar onde a Chave Secreta fica');
+    const version = await page.$eval('#app-version', (el) => el.textContent);
+    if (!/^OwLock v\d+\.\d+/.test(version)) fail(`rodapé de versão inesperado: ${version}`);
+    log(`Ajustes mostram "Guardada em: ${storage}" e o rodapé "${version}"`);
+    await page.click('#open-kit');
+    await page.waitForSelector('#kit-password');
+    await page.type('#kit-password', 'senha-errada-xyz');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelector('#kit-sheet-error')?.textContent.length > 0);
+    if (await page.$('#kit-key')) fail('a Chave não deveria aparecer com a senha errada');
+    log('Ver Kit com senha errada mostra o erro e não revela a Chave');
+    await page.click('#kit-password', { clickCount: 3 });
+    await page.type('#kit-password', PASSWORD);
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('#kit-key');
+    const sheetKey = await page.$eval('#kit-key', (el) => el.textContent);
+    if (!KEY_FORMAT.test(sheetKey)) fail(`formato da Chave inesperado: ${sheetKey}`);
+    await shot(page, '30-kit-sheet');
+    await page.click('#kit-sheet-save');
+    await page.waitForFunction(() => /Kit salvo/.test(document.querySelector('#kit-sheet-status')?.textContent || ''));
+    await page.click('#kit-sheet-close');
+    await page.waitForSelector('#kit-key', { hidden: true });
+    if ((await page.evaluate(() => document.body.textContent)).includes(sheetKey)) fail('a Chave ficou no DOM depois de fechar o sheet');
+    log('senha certa mostra a Chave (OW2-…), Salvar Kit grava e a Chave some ao fechar');
+
     await page.click('#nav-vault');
     await page.waitForSelector('#entry-list .row');
     await page.setViewport({ width: 390, height: 844, isMobile: true, deviceScaleFactor: 2 });
@@ -664,6 +795,8 @@ async function main() {
     const leftovers = await page.evaluate(() => document.body.textContent.includes('discord2021') || !!document.querySelector('#entry-list'));
     if (leftovers) fail('restos do cofre no DOM depois de bloquear');
     log('Bloquear volta ao desbloqueio e limpa a tela');
+
+    await createScenario(browser);
 
     if (problems.length) fail(`problemas no navegador:\n  ${problems.join('\n  ')}`);
     log('nenhum erro de console e nenhuma requisição externa');
