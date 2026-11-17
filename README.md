@@ -235,7 +235,6 @@ Para publicar uma nova versão, atualize a versão em `owlock/__init__.py` e `py
 
 Versões entregues e próximos passos estão no [ROADMAP.md](ROADMAP.md). Em resumo:
 
-- **v1.0:** versão estável para o dia a dia, com instalador para Windows.
 - **v1.1:** códigos 2FA (TOTP) opcionais.
 - **v1.2:** extensão de navegador para preencher login e senha.
 - **v2.0:** aplicativo de celular com pareamento por QR code e sincronização.

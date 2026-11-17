@@ -13,12 +13,9 @@ O OwLock é um gerenciador de senhas local, offline e de código aberto. Este do
 | **v0.5.0** | Cofre v2 com Chave Secreta, chave do cofre separada, cada conta cifrada separadamente, Kit de emergência, migração automática e SECURITY.md |
 | **v0.6.0** | Ícone na bandeja do Windows, busca rápida com atalho global (Ctrl+Shift+Espaço), iniciar com o Windows, bloquear ao minimizar e ao travar o Windows, senhas repetidas e antigas, favoritas e backups com histórico |
 | **v0.7.0** | Importar CSV do Chrome, Edge, Google, Bitwarden e Firefox (com prévia, contas repetidas e opção de apagar o CSV), exportar com confirmação da senha mestra, atalhos de teclado e links de login revisados |
+| **v1.0.0** | Instalador para Windows (menu Iniciar, desinstalador, atualização), uma única instância por cofre, revisão final e documentação |
 
 ## Próximas versões
-
-### v1.0 — Desktop estável, pronto para uso diário
-- **Instalador para Windows** com atalho no menu Iniciar e desinstalador, além do `OwLock.exe` portátil.
-- Revisão final de código e de segurança, README e SECURITY.md atualizados.
 
 ### v1.1 — Códigos 2FA
 - **Códigos 2FA (TOTP)** opcionais, com aviso sobre guardar senha e 2FA no mesmo lugar.
