@@ -312,6 +312,16 @@ def test_toggle_autostart_calls_autostart_and_saves(rig):
     assert "autostart.disable" in rig.log and not rig.autostart.on
 
 
+def test_update_config_keeps_autostart_when_unchanged(rig):
+    """A interface manda todas as chaves; sem mudança, o registro não é regravado."""
+    rig.autostart.on = True
+    rig.log.clear()
+    rig.ctl.update_config({"start_with_windows": True, "close_to_tray": False})
+    assert "autostart.enable" not in rig.log and rig.autostart.on
+    rig.ctl.update_config({"start_with_windows": False})
+    assert "autostart.disable" in rig.log and not rig.autostart.on
+
+
 def test_start_mirrors_registry_into_config(tmp_path):
     r = Rig(tmp_path)
     r.autostart.on = True

@@ -269,7 +269,9 @@ class DesktopController:
         """Aplica na hora (registro, atalho) e grava o config.json. `values` já validado."""
         with self._lock:
             new = DesktopConfig(**{**self.config.to_dict(), **values})
-            if "start_with_windows" in values:
+            # só mexe no registro quando o valor muda: a interface envia todas as chaves a cada ajuste,
+            # e regravar o "Iniciar com o Windows" sem necessidade trocaria o comando salvo (outro cofre).
+            if "start_with_windows" in values and values["start_with_windows"] != self.autostart_enabled():
                 if values["start_with_windows"]:
                     self._autostart.enable()
                 else:
