@@ -35,15 +35,27 @@ jobs:
           pyinstaller --noconfirm --onefile --windowed --name OwLock
           --icon packaging/owlock.ico --add-data "owlock/web;owlock/web" --add-data "owlock/app/owlock.ico;owlock/app" --add-data "owlock/core/data;owlock/core/data" --collect-all webview --collect-all pystray --collect-submodules keyring --paths .
           packaging/run_owlock.py
+      - name: Gerar instalador
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+            if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          }
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          $version = python -c "import owlock; print(owlock.__version__)"
+          & $iscc "/DAppVersion=$version" packaging\owlock.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Hash SHA-256
         shell: bash
-        run: (cd dist && sha256sum OwLock.exe | tee OwLock.exe.sha256)
+        run: (cd dist && sha256sum OwLock.exe OwLock-Setup.exe | tee SHA256SUMS.txt && sha256sum OwLock.exe > OwLock.exe.sha256)
       - name: Publicar na release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          files="dist/OwLock.exe dist/OwLock.exe.sha256"
+          files="dist/OwLock-Setup.exe dist/OwLock.exe dist/OwLock.exe.sha256 dist/SHA256SUMS.txt"
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" $files --clobber
           else
