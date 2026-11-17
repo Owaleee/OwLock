@@ -14,6 +14,7 @@ O OwLock é um gerenciador de senhas local, offline e de código aberto. Este do
 | **v0.6.0** | Ícone na bandeja do Windows, busca rápida com atalho global (Ctrl+Shift+Espaço), iniciar com o Windows, bloquear ao minimizar e ao travar o Windows, senhas repetidas e antigas, favoritas e backups com histórico |
 | **v0.7.0** | Importar CSV do Chrome, Edge, Google, Bitwarden e Firefox (com prévia, contas repetidas e opção de apagar o CSV), exportar com confirmação da senha mestra, atalhos de teclado e links de login revisados |
 | **v1.0.0** | Instalador para Windows (menu Iniciar, desinstalador, atualização), uma única instância por cofre, revisão final e documentação |
+| **v1.0.1** | Correção do "Iniciar com o Windows" ao mudar outras opções da área de trabalho e imagens do app no README |
 
 ## Próximas versões
 
