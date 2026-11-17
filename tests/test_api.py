@@ -412,6 +412,8 @@ def test_public_surface(api):
         "copy_text", "save_entry", "delete_entry", "generate_password",
         "check_strength", "change_master_password", "shutdown",
         "list_categories", "save_category", "delete_category", "category_options",
+        "get_settings", "save_settings", "get_password_history",
+        "reveal_history_password", "copy_history_password", "open_url",
     }
 
 

@@ -7,12 +7,18 @@ Métodos públicos são expostos à interface; auxiliares começam com "_".
 from __future__ import annotations
 
 import dataclasses
+import re
 import threading
 import time
+import webbrowser
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from owlock.core import (
+    AUTO_LOCK_OPTIONS,
+    CLIPBOARD_OPTIONS,
+    Settings,
     CATEGORY_COLORS,
     CATEGORY_ICONS,
     Category,
@@ -31,6 +37,53 @@ _FIELDS = ("username", "password")
 _ATTENTION_MAX_SCORE = 2
 _MAX_CATEGORY_NAME = 24
 _MAX_CATEGORIES = 30
+_MAX_URL = 2048
+_RECOMMENDED_AUTO_LOCK = 5
+_RECOMMENDED_CLIPBOARD = 30
+# "esquema:" que não seja "host:porta" (ex.: javascript:, mailto:, file:, ftp://)
+_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:(?!\d+(?:[/?#]|$))")
+
+
+def _plural(n: int, singular: str, plural: str) -> str:
+    return f"{n} {singular if n == 1 else plural}"
+
+
+def _seconds_label(total: int) -> str:
+    minutes, seconds = divmod(total, 60)
+    parts = []
+    if minutes:
+        parts.append(_plural(minutes, "minuto", "minutos"))
+    if seconds or not parts:
+        parts.append(_plural(seconds, "segundo", "segundos"))
+    return " e ".join(parts)
+
+
+def _valid_http_url(url: str) -> bool:
+    """True para URL http/https com host, sem espaços/controles, até 2048 caracteres."""
+    if not url or len(url) > _MAX_URL:
+        return False
+    if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in url):
+        return False
+    try:
+        parts = urlsplit(url)
+        parts.port  # noqa: B018 - valida a porta
+    except ValueError:
+        return False
+    return parts.scheme in ("http", "https") and bool(parts.hostname)
+
+
+def _normalize_url(raw: str) -> str | None:
+    """Normaliza a URL da conta: "" se vazia; None se inválida."""
+    url = raw.strip()
+    if not url:
+        return ""
+    if len(url) > _MAX_URL:
+        return None
+    if _SCHEME_RE.match(url) is None:
+        if url.startswith("//"):
+            return None
+        url = "https://" + url
+    return url if _valid_http_url(url) else None
 
 
 class _PyperclipClipboard:
@@ -70,6 +123,7 @@ class Api:
         clock: Callable[[], float] = time.monotonic,
         clear_after: int = 30,
         timer_factory: Callable[..., Any] = threading.Timer,
+        url_opener: Callable[[str], Any] | None = None,
     ) -> None:
         self._path = Path(vault_path)
         self._auto_lock = auto_lock_seconds
@@ -77,6 +131,7 @@ class Api:
         self._clock = clock
         self._clear_after = clear_after
         self._timer_factory = timer_factory
+        self._url_opener = url_opener if url_opener is not None else webbrowser.open
         self._lock = threading.RLock()
         self._vault: Vault | None = None
         self._last_activity = 0.0
@@ -112,6 +167,12 @@ class Api:
         self._vault = None
         self._cancel_timer()
         self._clear_clipboard_if_ours()
+
+    def _apply_settings(self) -> None:
+        """Aplica os ajustes do cofre aberto (chamado com o lock adquirido)."""
+        assert self._vault is not None
+        self._auto_lock = self._vault.settings.auto_lock_minutes * 60
+        self._clear_after = self._vault.settings.clipboard_clear_seconds
 
     def _require(self) -> dict[str, Any] | None:
         """Exige cofre aberto e dentro do prazo; registra atividade."""
@@ -161,6 +222,8 @@ class Api:
             "strength": password_strength(entry.password),
             "category_id": entry.category_id if category is not None else "",
             "category": self._category_dict(category) if category is not None else None,
+            "url": entry.url,
+            "history_count": len(entry.password_history),
         }
 
     def _find(self, entry_id: Any) -> Entry | None:
@@ -189,6 +252,7 @@ class Api:
                 "unlocked": self._vault is not None,
                 "vault_path": str(self._path),
                 "auto_lock_seconds": self._auto_lock,
+                "clipboard_clear_seconds": self._clear_after,
                 "seconds_left": self._seconds_left(),
             }
 
@@ -214,6 +278,7 @@ class Api:
             except OSError:
                 return _error("save_failed", "Não foi possível gravar o cofre.")
             self._vault = vault
+            self._apply_settings()
             self._last_activity = self._clock()
             return {"ok": True}
 
@@ -235,6 +300,7 @@ class Api:
             except OSError:
                 return _error("open_failed", "Não foi possível ler o arquivo do cofre.")
             self._vault = vault
+            self._apply_settings()
             self._last_activity = self._clock()
             return {"ok": True}
 
@@ -375,6 +441,11 @@ class Api:
                 "twofa_app": str(data.get("twofa_app") or "") if has_2fa else "",
                 "notes": str(data.get("notes") or ""),
             }
+            raw_url = data.get("url")
+            url = _normalize_url(raw_url) if isinstance(raw_url, str) else ("" if not raw_url else None)
+            if url is None:
+                return _error("invalid_url", "Endereço do site inválido. Use http:// ou https://.")
+            fields["url"] = url
             category_id = data.get("category_id")
             category_id = category_id if isinstance(category_id, str) else ""
             if category_id and self._find_category(category_id) is None:
@@ -411,6 +482,146 @@ class Api:
             except OSError:
                 return _error("save_failed", "Não foi possível salvar o cofre.")
             return {"ok": True}
+
+    # ---- histórico e site ----
+    def get_password_history(self, id: str) -> dict[str, Any]:
+        """Datas e força das senhas antigas (nunca as senhas)."""
+        with self._lock:
+            err = self._require()
+            if err:
+                return err
+            entry = self._find(id)
+            if entry is None:
+                return _not_found()
+            return {
+                "ok": True,
+                "created_at": entry.created_at,
+                "history": [
+                    {
+                        "index": n,
+                        "changed_at": item["changed_at"],
+                        "length": len(item["password"]),
+                        "strength": password_strength(item["password"]),
+                    }
+                    for n, item in enumerate(entry.password_history)
+                ],
+            }
+
+    def _history_password(self, id: Any, index: Any) -> tuple[str | None, dict[str, Any] | None]:
+        """Senha antiga por índice (0 = mais recente) ou o erro a devolver."""
+        err = self._require()
+        if err:
+            return None, err
+        entry = self._find(id)
+        if entry is None:
+            return None, _not_found()
+        if (
+            isinstance(index, bool)
+            or not isinstance(index, int)
+            or not 0 <= index < len(entry.password_history)
+        ):
+            return None, _error("invalid_index", "Versão de senha inexistente.")
+        return entry.password_history[index]["password"], None
+
+    def reveal_history_password(self, id: str, index: int) -> dict[str, Any]:
+        """Devolve uma senha antiga (0 = a mais recente)."""
+        with self._lock:
+            password, err = self._history_password(id, index)
+            if err:
+                return err
+            return {"ok": True, "password": password}
+
+    def copy_history_password(self, id: str, index: int) -> dict[str, Any]:
+        """Copia uma senha antiga e agenda a limpeza da área de transferência."""
+        with self._lock:
+            password, err = self._history_password(id, index)
+            if err:
+                return err
+            assert password is not None
+            return self._copy_with_timer(password)
+
+    def open_url(self, id: str) -> dict[str, Any]:
+        """Abre o site salvo da conta no navegador padrão (só http/https)."""
+        with self._lock:
+            err = self._require()
+            if err:
+                return err
+            entry = self._find(id)
+            if entry is None:
+                return _not_found()
+            url = entry.url
+            if not url:
+                return _error("no_url", "Esta conta não tem um site salvo.")
+            if not _valid_http_url(url):
+                return _error("invalid_url", "O endereço salvo não é um site http/https válido.")
+        try:  # fora do lock: o navegador pode demorar
+            opened = self._url_opener(url)
+        except Exception:  # noqa: BLE001
+            opened = False
+        if opened is False:
+            return _error("open_failed", "Não foi possível abrir o navegador.")
+        return {"ok": True}
+
+    # ---- ajustes ----
+    @staticmethod
+    def _options(values: tuple[int, ...], recommended: int, label: Callable[[int], str]) -> list[dict[str, Any]]:
+        return [
+            {"value": v, "label": label(v), "recommended": v == recommended} for v in values
+        ]
+
+    def get_settings(self) -> dict[str, Any]:
+        """Ajustes atuais e opções disponíveis."""
+        with self._lock:
+            err = self._require()
+            if err:
+                return err
+            assert self._vault is not None
+            st = self._vault.settings
+            return {
+                "ok": True,
+                "settings": {
+                    "auto_lock_minutes": st.auto_lock_minutes,
+                    "clipboard_clear_seconds": st.clipboard_clear_seconds,
+                },
+                "options": {
+                    "auto_lock_minutes": self._options(
+                        AUTO_LOCK_OPTIONS, _RECOMMENDED_AUTO_LOCK,
+                        lambda v: _plural(v, "minuto", "minutos"),
+                    ),
+                    "clipboard_clear_seconds": self._options(
+                        CLIPBOARD_OPTIONS, _RECOMMENDED_CLIPBOARD, _seconds_label
+                    ),
+                },
+            }
+
+    def save_settings(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Salva os ajustes e os aplica na hora (reinicia o prazo de inatividade)."""
+        with self._lock:
+            err = self._require()
+            if err:
+                return err
+            vault = self._vault
+            assert vault is not None
+            data = data if isinstance(data, dict) else {}
+            lock = data.get("auto_lock_minutes", vault.settings.auto_lock_minutes)
+            clear = data.get("clipboard_clear_seconds", vault.settings.clipboard_clear_seconds)
+            if not isinstance(lock, int) or isinstance(lock, bool) or lock not in AUTO_LOCK_OPTIONS:
+                return _error("invalid_auto_lock", "Tempo de bloqueio automático inválido.")
+            if not isinstance(clear, int) or isinstance(clear, bool) or clear not in CLIPBOARD_OPTIONS:
+                return _error("invalid_clipboard", "Tempo de limpeza da área de transferência inválido.")
+            try:
+                saved = vault.update_settings(Settings(lock, clear))
+            except OSError:
+                return _error("save_failed", "Não foi possível salvar o cofre.")
+            self._apply_settings()
+            self._last_activity = self._clock()
+            return {
+                "ok": True,
+                "settings": {
+                    "auto_lock_minutes": saved.auto_lock_minutes,
+                    "clipboard_clear_seconds": saved.clipboard_clear_seconds,
+                },
+            }
 
     # ---- categorias ----
     def list_categories(self) -> dict[str, Any]:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import binascii
 import hmac
 import json
@@ -16,10 +17,11 @@ from cryptography.exceptions import InvalidTag
 
 from . import crypto
 from .errors import VaultCorruptedError, VaultExistsError, WrongPasswordError
-from .models import Category, Entry
+from .models import Category, Entry, Settings
 
 DEFAULT_VAULT_PATH = Path.home() / ".owlock" / "owlock.vault"
 MIN_MASTER_PASSWORD_LENGTH = 8
+MAX_PASSWORD_HISTORY = 20
 
 FORMAT_NAME = "owlock-vault"
 FORMAT_VERSION = 1
@@ -100,10 +102,12 @@ class Vault:
         kdf_params: dict[str, int],
         entries: list[Entry] | None = None,
         categories: list[Category] | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self.path = Path(path)
         self.entries: list[Entry] = entries if entries is not None else []
         self.categories: list[Category] = categories if categories is not None else []
+        self.settings: Settings = settings if settings is not None else Settings()
         self._key = key
         self._salt = salt
         self._kdf = dict(kdf_params)
@@ -169,9 +173,10 @@ class Vault:
                 categories = [Category.from_dict(d) for d in data["categories"]]
             else:
                 categories = default_categories()
+            settings = Settings.from_dict(data.get("settings"))
         except (UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
             raise VaultCorruptedError("Conteúdo do cofre corrompido.") from exc
-        return cls(path, key, salt, params, entries, categories)
+        return cls(path, key, salt, params, entries, categories, settings)
 
     # ---- formato ----
     @staticmethod
@@ -201,6 +206,7 @@ class Vault:
             {
                 "entries": [e.to_dict() for e in self.entries],
                 "categories": [c.to_dict() for c in self.categories],
+                "settings": self.settings.to_dict(),
             },
             ensure_ascii=False,
         ).encode("utf-8")
@@ -250,16 +256,29 @@ class Vault:
         raise KeyError(entry_id)
 
     def update(self, entry: Entry) -> Entry:
-        """Atualiza a entrada pelo id (preserva created_at) e salva."""
+        """Atualiza a entrada pelo id (preserva created_at) e salva.
+
+        Se a senha mudou em relação à salva, a senha antiga entra no início do
+        histórico (máximo MAX_PASSWORD_HISTORY itens). Em falha, tudo é restaurado.
+        """
         i = self._index(entry.id)
-        entry.created_at = self.entries[i].created_at
-        entry.updated_at = _now()
+        stored = self.entries[i]
         previous = list(self.entries)
+        old_created, old_updated = entry.created_at, entry.updated_at
+        old_history = copy.deepcopy(entry.password_history)
+        history = copy.deepcopy(stored.password_history)
+        if entry.password != stored.password:
+            history.insert(0, {"password": stored.password, "changed_at": _now()})
+        entry.password_history = history[:MAX_PASSWORD_HISTORY]
+        entry.created_at = stored.created_at
+        entry.updated_at = _now()
         self.entries[i] = entry
         try:
             self.save()
         except BaseException:
             self.entries = previous
+            entry.created_at, entry.updated_at = old_created, old_updated
+            entry.password_history = old_history
             raise
         return entry
 
@@ -323,6 +342,20 @@ class Vault:
                 e.category_id = category_id
             raise
         return len(affected)
+
+    # ---- ajustes ----
+    def update_settings(self, settings: Settings) -> Settings:
+        """Troca os ajustes e salva; em falha, restaura os anteriores."""
+        if not isinstance(settings, Settings) or not settings.is_valid():
+            raise ValueError("Ajustes inválidos.")
+        previous = self.settings
+        self.settings = Settings(**settings.to_dict())
+        try:
+            self.save()
+        except BaseException:
+            self.settings = previous
+            raise
+        return self.settings
 
     def search(self, text: str) -> list[Entry]:
         """Busca sem diferenciar maiúsculas/acentos (nunca na senha)."""

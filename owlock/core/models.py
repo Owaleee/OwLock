@@ -1,6 +1,7 @@
 """Modelos de dados do cofre."""
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from typing import Any
@@ -68,10 +69,14 @@ class Entry:
     id: str = field(default_factory=lambda: uuid4().hex)
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
+    url: str = ""
+    password_history: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Converte para dicionário serializável em JSON."""
-        return {f.name: getattr(self, f.name) for f in fields(self)}
+        out = {f.name: getattr(self, f.name) for f in fields(self)}
+        out["password_history"] = copy.deepcopy(self.password_history)
+        return out
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Entry":
@@ -82,4 +87,66 @@ class Entry:
             if required not in d:
                 raise ValueError(f"Entrada inválida: campo '{required}' ausente.")
         names = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in d.items() if k in names})
+        data = {k: v for k, v in d.items() if k in names}
+        history = data.get("password_history", [])
+        if not isinstance(history, list):
+            raise ValueError("Entrada inválida: histórico de senhas deve ser uma lista.")
+        for item in history:
+            if (
+                not isinstance(item, dict)
+                or not isinstance(item.get("password"), str)
+                or not isinstance(item.get("changed_at"), str)
+            ):
+                raise ValueError("Entrada inválida: item de histórico malformado.")
+        data["password_history"] = [
+            {"password": i["password"], "changed_at": i["changed_at"]} for i in history
+        ]
+        if not isinstance(data.get("url", ""), str):
+            data["url"] = ""
+        return cls(**data)
+
+
+AUTO_LOCK_OPTIONS: tuple[int, ...] = (1, 2, 5, 10, 15, 30)
+CLIPBOARD_OPTIONS: tuple[int, ...] = (10, 20, 30, 45, 60, 90)
+DEFAULT_AUTO_LOCK_MINUTES = 5
+DEFAULT_CLIPBOARD_SECONDS = 30
+
+
+def _pick(value: Any, options: tuple[int, ...], default: int) -> int:
+    """Devolve `value` se for um inteiro (não booleano) dentre as opções; senão o padrão."""
+    if isinstance(value, bool) or not isinstance(value, int) or value not in options:
+        return default
+    return value
+
+
+@dataclass
+class Settings:
+    """Ajustes do cofre (guardados dentro do conteúdo cifrado)."""
+
+    auto_lock_minutes: int = DEFAULT_AUTO_LOCK_MINUTES
+    clipboard_clear_seconds: int = DEFAULT_CLIPBOARD_SECONDS
+
+    def to_dict(self) -> dict[str, Any]:
+        """Converte para dicionário serializável em JSON."""
+        return {f.name: getattr(self, f.name) for f in fields(self)}
+
+    @classmethod
+    def from_dict(cls, d: Any) -> "Settings":
+        """Cria a partir de dicionário; valores inválidos ou ausentes viram o padrão."""
+        if not isinstance(d, dict):
+            return cls()
+        return cls(
+            auto_lock_minutes=_pick(
+                d.get("auto_lock_minutes"), AUTO_LOCK_OPTIONS, DEFAULT_AUTO_LOCK_MINUTES
+            ),
+            clipboard_clear_seconds=_pick(
+                d.get("clipboard_clear_seconds"), CLIPBOARD_OPTIONS, DEFAULT_CLIPBOARD_SECONDS
+            ),
+        )
+
+    def is_valid(self) -> bool:
+        """True se ambos os valores estão entre as opções permitidas."""
+        return (
+            _pick(self.auto_lock_minutes, AUTO_LOCK_OPTIONS, -1) != -1
+            and _pick(self.clipboard_clear_seconds, CLIPBOARD_OPTIONS, -1) != -1
+        )
