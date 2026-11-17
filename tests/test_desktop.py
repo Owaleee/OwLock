@@ -514,6 +514,7 @@ def test_autostart_command_is_quoted(monkeypatch, tmp_path):
 
 
 def test_locked_variant_grays_green_led():
+    pytest.importorskip("PIL")  # Pillow vem com o pystray, que só é instalado no Windows
     from PIL import Image
 
     img = Image.new("RGBA", (2, 1))
