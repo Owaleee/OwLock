@@ -40,6 +40,15 @@ def run(vault_path: Path, tray: bool = False) -> None:
 
     `tray=True` (opção --tray, usada pela inicialização com o Windows) abre escondido na bandeja.
     """
+    from owlock.app.desktop.single import SingleInstance, instance_key
+
+    single = SingleInstance(instance_key(vault_path))
+    if not single.acquire():
+        # já existe um OwLock aberto com este cofre: ele mostra a janela e este processo termina
+        if not tray:
+            single.notify_existing()
+        return
+
     import webview  # import tardio: os testes não dependem do pywebview
 
     from owlock.core import default_store
@@ -105,6 +114,7 @@ def run(vault_path: Path, tray: bool = False) -> None:
         )
         controller = _build_controller(api, window, quick, vault_path)
         api._attach_desktop(controller)
+        single.listen(controller.show_main)
         window.events.closed += controller.quit
     # http_server: serve a interface por um servidor local interno (necessário para módulos JS);
     # private_mode: não guarda cookies nem armazenamento do navegador em disco.
