@@ -1,4 +1,5 @@
 """Núcleo do cofre (sem dependência de interface)."""
+from .catalog import Catalog, Service, normalize
 from .errors import OwLockError, VaultCorruptedError, VaultExistsError, WrongPasswordError
 from .generator import generate_password
 from .models import (
@@ -13,6 +14,9 @@ from .models import (
 from .vault import DEFAULT_VAULT_PATH, MIN_MASTER_PASSWORD_LENGTH, Vault
 
 __all__ = [
+    "Catalog",
+    "Service",
+    "normalize",
     "AUTO_LOCK_OPTIONS",
     "CLIPBOARD_OPTIONS",
     "Settings",

@@ -10,6 +10,7 @@ import dataclasses
 import re
 import threading
 import time
+import uuid
 import webbrowser
 from pathlib import Path
 from typing import Any, Callable
@@ -30,6 +31,7 @@ from owlock.core import (
     WrongPasswordError,
     generate_password,
 )
+from owlock.core.catalog import Catalog, Service, brand_icons, icon_url, normalize
 from owlock.core.strength import password_strength
 
 _FILTERS = ("all", "2fa", "attention")
@@ -38,6 +40,9 @@ _ATTENTION_MAX_SCORE = 2
 _MAX_CATEGORY_NAME = 24
 _MAX_CATEGORIES = 30
 _MAX_URL = 2048
+_MAX_SERVICE_NAME = 40
+_MAX_ALIASES = 10
+_MAX_CUSTOM_SERVICES = 200
 _RECOMMENDED_AUTO_LOCK = 5
 _RECOMMENDED_CLIPBOARD = 30
 # "esquema:" que não seja "host:porta" (ex.: javascript:, mailto:, file:, ftp://)
@@ -207,7 +212,38 @@ class Api:
                 return category
         return None
 
-    def _summary(self, entry: Entry) -> dict[str, Any]:
+    def _catalog(self) -> Catalog:
+        assert self._vault is not None
+        services = self._vault.services
+        return Catalog(services["custom"], services["overrides"])
+
+    @staticmethod
+    def _service_dict(service: Service) -> dict[str, Any]:
+        return {
+            "key": service.key,
+            "name": service.name,
+            "aliases": list(service.aliases),
+            "login_url": service.login_url,
+            "default_url": service.default_url,
+            "icon": service.icon,
+            "icon_url": icon_url(service.icon),
+            "color": service.color or None,
+            "builtin": service.builtin,
+            "customized": service.customized,
+        }
+
+    def _summary(self, entry: Entry, catalog: Catalog | None = None) -> dict[str, Any]:
+        catalog = catalog if catalog is not None else self._catalog()
+        icons = brand_icons()
+        recognized = catalog.match(entry.service)
+        if entry.icon == "none":
+            slug = ""
+        elif entry.icon:
+            slug = entry.icon
+        else:
+            slug = recognized.icon if recognized is not None else ""
+        if slug not in icons:
+            slug = ""
         category = self._find_category(entry.category_id) if entry.category_id else None
         return {
             "id": entry.id,
@@ -224,6 +260,10 @@ class Api:
             "category": self._category_dict(category) if category is not None else None,
             "url": entry.url,
             "history_count": len(entry.password_history),
+            "icon": entry.icon,
+            "icon_url": icon_url(slug),
+            "icon_color": icons[slug]["hex"] or None if slug else None,
+            "service_key": recognized.key if recognized is not None else None,
         }
 
     def _find(self, entry_id: Any) -> Entry | None:
@@ -358,7 +398,12 @@ class Api:
                     if password_strength(e.password)["score"] <= _ATTENTION_MAX_SCORE
                 ]
             found.sort(key=lambda e: e.service.casefold())
-            return {"ok": True, "entries": [self._summary(e) for e in found], "stats": stats}
+            catalog = self._catalog()
+            return {
+                "ok": True,
+                "entries": [self._summary(e, catalog) for e in found],
+                "stats": stats,
+            }
 
     def get_entry(self, id: str) -> dict[str, Any]:
         """Devolve uma conta (sem a senha)."""
@@ -451,6 +496,11 @@ class Api:
             if category_id and self._find_category(category_id) is None:
                 return _error("invalid_category", "Categoria inválida.")
             fields["category_id"] = category_id
+            icon = data.get("icon")
+            if icon is not None:
+                if not isinstance(icon, str) or (icon not in ("", "none") and icon not in brand_icons()):
+                    return _error("invalid_icon", "Ícone inválido.")
+                fields["icon"] = icon
             entry_id = data.get("id")
             try:
                 if not entry_id:
@@ -549,9 +599,12 @@ class Api:
             entry = self._find(id)
             if entry is None:
                 return _not_found()
-            url = entry.url
+            url, source = entry.url, "entry"
             if not url:
-                return _error("no_url", "Esta conta não tem um site salvo.")
+                recognized = self._catalog().match(entry.service)
+                if recognized is None:
+                    return _error("no_url", "Esta conta não tem um site salvo.")
+                url, source = recognized.login_url, "library"
             if not _valid_http_url(url):
                 return _error("invalid_url", "O endereço salvo não é um site http/https válido.")
         try:  # fora do lock: o navegador pode demorar
@@ -560,7 +613,7 @@ class Api:
             opened = False
         if opened is False:
             return _error("open_failed", "Não foi possível abrir o navegador.")
-        return {"ok": True}
+        return {"ok": True, "source": source}
 
     # ---- ajustes ----
     @staticmethod
@@ -709,6 +762,190 @@ class Api:
             "ok": True,
             "colors": [{"key": k, "hex": h} for k, h in CATEGORY_COLORS.items()],
             "icons": list(CATEGORY_ICONS),
+        }
+
+    # ---- biblioteca de serviços ----
+    def lookup_service(self, name: str) -> dict[str, Any]:
+        """Serviço reconhecido pelo nome digitado e sugestões."""
+        with self._lock:
+            err = self._require()
+            if err:
+                return err
+            catalog = self._catalog()
+            text = name if isinstance(name, str) else ""
+            match = catalog.match(text)
+            return {
+                "ok": True,
+                "match": self._service_dict(match) if match is not None else None,
+                "suggestions": [self._service_dict(x) for x in catalog.suggest(text)],
+            }
+
+    def list_services(self, query: str = "") -> dict[str, Any]:
+        """Lista a biblioteca (embutidos + personalizados), com busca por nome, apelido ou domínio."""
+        with self._lock:
+            err = self._require()
+            if err:
+                return err
+            needle = normalize(query if isinstance(query, str) else "")
+            found = []
+            for service in self._catalog().all():
+                if needle:
+                    host = urlsplit(service.login_url).hostname or ""
+                    haystack = [normalize(service.name), normalize(host)]
+                    haystack += [normalize(a) for a in service.aliases]
+                    if not any(needle in h for h in haystack):
+                        continue
+                found.append(self._service_dict(service))
+            return {"ok": True, "services": found}
+
+    def _save_services(self, custom: list[dict[str, Any]], overrides: dict[str, str]) -> dict[str, Any] | None:
+        assert self._vault is not None
+        try:
+            self._vault.update_services(custom, overrides)
+        except OSError:
+            return _error("save_failed", "Não foi possível salvar o cofre.")
+        return None
+
+    def save_service(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Cria (sem key), edita personalizado ou altera só o link de um embutido."""
+        with self._lock:
+            err = self._require()
+            if err:
+                return err
+            vault = self._vault
+            assert vault is not None
+            data = data if isinstance(data, dict) else {}
+            catalog = self._catalog()
+            custom = [dict(c) for c in vault.services["custom"]]
+            overrides = dict(vault.services["overrides"])
+            key = data.get("key")
+            current = None
+            if key:
+                current = catalog.get(key)
+                if current is None:
+                    return _error("not_found", "Serviço não encontrado.")
+            raw_url = data.get("login_url")
+            url = _normalize_url(raw_url) if isinstance(raw_url, str) else None
+            if not url:
+                return _error("invalid_url", "Endereço de login inválido. Use http:// ou https://.")
+
+            if current is not None and current.builtin:
+                if url == current.default_url:
+                    overrides.pop(current.key, None)
+                else:
+                    overrides[current.key] = url
+                failed = self._save_services(custom, overrides)
+                if failed:
+                    return failed
+                return {"ok": True, "service": self._service_dict(self._catalog().get(current.key))}
+
+            name = data.get("name")
+            name = name.strip() if isinstance(name, str) else ""
+            if not name or not normalize(name):
+                return _error("name_required", "Informe o nome do serviço.")
+            if len(name) > _MAX_SERVICE_NAME:
+                return _error(
+                    "name_too_long", f"O nome deve ter no máximo {_MAX_SERVICE_NAME} caracteres."
+                )
+            raw_aliases = data.get("aliases")
+            aliases: list[str] = []
+            seen: set[str] = set()
+            for alias in raw_aliases if isinstance(raw_aliases, list) else []:
+                alias = alias.strip() if isinstance(alias, str) else ""
+                norm = normalize(alias)
+                if not norm or norm in seen:
+                    continue
+                if len(alias) > _MAX_SERVICE_NAME:
+                    return _error(
+                        "name_too_long",
+                        f"Cada apelido deve ter no máximo {_MAX_SERVICE_NAME} caracteres.",
+                    )
+                seen.add(norm)
+                aliases.append(alias)
+            if len(aliases) > _MAX_ALIASES:
+                return _error("too_many", f"O limite é de {_MAX_ALIASES} apelidos.")
+            icon = data.get("icon", "")
+            icon = "" if icon is None else icon
+            if not isinstance(icon, str) or (icon and icon not in brand_icons()):
+                return _error("invalid_icon", "Ícone inválido.")
+            wanted = normalize(name)
+            for other in catalog.all():
+                if current is not None and other.key == current.key:
+                    continue
+                if wanted in (normalize(other.name), *map(normalize, other.aliases)):
+                    return _error("name_exists", "Já existe um serviço com esse nome.")
+            if current is None and len(custom) >= _MAX_CUSTOM_SERVICES:
+                return _error(
+                    "too_many", f"O limite é de {_MAX_CUSTOM_SERVICES} serviços personalizados."
+                )
+            record = {
+                "key": current.key if current is not None else "custom-" + uuid.uuid4().hex,
+                "name": name,
+                "aliases": aliases,
+                "login_url": url,
+                "icon": icon,
+            }
+            if current is None:
+                custom.append(record)
+            else:
+                custom = [record if c["key"] == record["key"] else c for c in custom]
+            failed = self._save_services(custom, overrides)
+            if failed:
+                return failed
+            return {"ok": True, "service": self._service_dict(self._catalog().get(record["key"]))}
+
+    def reset_service(self, key: str) -> dict[str, Any]:
+        """Restaura o link padrão de um serviço embutido."""
+        with self._lock:
+            err = self._require()
+            if err:
+                return err
+            vault = self._vault
+            assert vault is not None
+            catalog = self._catalog()
+            if not isinstance(key, str) or not catalog.is_builtin(key):
+                return _error("not_found", "Serviço não encontrado.")
+            overrides = dict(vault.services["overrides"])
+            if key in overrides:
+                del overrides[key]
+                failed = self._save_services([dict(c) for c in vault.services["custom"]], overrides)
+                if failed:
+                    return failed
+            return {"ok": True, "service": self._service_dict(self._catalog().get(key))}
+
+    def delete_service(self, key: str) -> dict[str, Any]:
+        """Remove um serviço personalizado (embutidos não podem ser removidos)."""
+        with self._lock:
+            err = self._require()
+            if err:
+                return err
+            vault = self._vault
+            assert vault is not None
+            catalog = self._catalog()
+            service = catalog.get(key)
+            if service is None:
+                return _error("not_found", "Serviço não encontrado.")
+            if service.builtin:
+                return _error("builtin_service", "Serviços da biblioteca não podem ser excluídos.")
+            custom = [dict(c) for c in vault.services["custom"] if c["key"] != key]
+            failed = self._save_services(custom, dict(vault.services["overrides"]))
+            if failed:
+                return failed
+            return {"ok": True}
+
+    def brand_icons(self) -> dict[str, Any]:
+        """Ícones de marcas disponíveis. Não exige cofre aberto."""
+        return {
+            "ok": True,
+            "icons": [
+                {
+                    "slug": i["slug"],
+                    "title": i["title"],
+                    "icon_url": icon_url(i["slug"]),
+                    "color": brand_icons()[i["slug"]]["hex"] or None,
+                }
+                for i in Catalog.icons()
+            ],
         }
 
     # ---- senhas ----

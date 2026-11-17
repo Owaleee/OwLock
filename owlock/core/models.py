@@ -71,6 +71,7 @@ class Entry:
     updated_at: str = field(default_factory=_now)
     url: str = ""
     password_history: list[dict[str, str]] = field(default_factory=list)
+    icon: str = ""  # "" = automático (pelo catálogo), "none" = letra, ou slug de ícone
 
     def to_dict(self) -> dict[str, Any]:
         """Converte para dicionário serializável em JSON."""
@@ -103,6 +104,8 @@ class Entry:
         ]
         if not isinstance(data.get("url", ""), str):
             data["url"] = ""
+        if not isinstance(data.get("icon", ""), str):
+            data["icon"] = ""
         return cls(**data)
 
 

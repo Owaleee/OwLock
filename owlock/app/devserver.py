@@ -14,6 +14,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
+from uuid import uuid4
 
 from owlock.app.api import Api
 from owlock.core import Entry, Vault
@@ -136,9 +137,22 @@ def seed_vault(path: Path) -> None:
         Entry("Steam", "seu_usuario_steam", "T7#qLm9!vRz2@kWp", True, "Steam Guard", "", cats["Jogos"], url="https://store.steampowered.com"),
         Entry("GitHub", "seu-usuario", "Hk3$wTz9&pLq5!mB", True, "Authy", "Chave de acesso do trabalho", cats["Trabalho"], url="https://github.com"),
         Entry("Discord", "seu.email@gmail.com", "discord2021", False, "", "Trocar esta senha", cats["Jogos"], url="https://discord.com"),
-        Entry("Netflix", "seu.email@gmail.com", "Nf!93kdPq", False, category_id=cats["Streaming"], url="https://www.netflix.com"),
-        Entry("Epic Games", "seu.email@gmail.com", "Zr8@cVn4#Yt6mJ1x", True, "Epic Authenticator", "", cats["Jogos"], url="https://store.epicgames.com"),
+        Entry("Netflix", "seu.email@gmail.com", "Nf!93kdPq", False, category_id=cats["Streaming"]),  # sem site: mostra o link da biblioteca
+        Entry("Epic Games", "seu.email@gmail.com", "Zr8@cVn4#Yt6mJ1x", True, "Epic Authenticator", "", cats["Jogos"], url="https://store.epicgames.com", icon="none"),  # letra no lugar do ícone
     ]
+    # Serviço personalizado na biblioteca de links.
+    vault.update_services(
+        [
+            {
+                "key": "custom-" + uuid4().hex,
+                "name": "Portal da Faculdade",
+                "aliases": ["faculdade"],
+                "login_url": "https://portal.exemplo.edu.br",
+                "icon": "",
+            }
+        ],
+        {},
+    )
     # Contas com versões antigas de senha (oldest -> atual), para o histórico aparecer.
     past = {"Discord": ("discord2019", "discord2020"), "GitHub": ("gh-antiga-2023",)}
     for entry in samples:

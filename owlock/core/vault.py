@@ -87,6 +87,46 @@ def default_categories() -> list[Category]:
     ]
 
 
+def empty_services() -> dict[str, Any]:
+    return {"custom": [], "overrides": {}}
+
+
+def _parse_services(raw: Any) -> dict[str, Any]:
+    """Valida o bloco "services" e devolve uma cópia normalizada (ValueError se inválido)."""
+    if not isinstance(raw, dict):
+        raise ValueError("Bloco de serviços inválido.")
+    custom_raw = raw.get("custom", [])
+    overrides_raw = raw.get("overrides", {})
+    if not isinstance(custom_raw, list) or not isinstance(overrides_raw, dict):
+        raise ValueError("Bloco de serviços inválido.")
+    custom: list[dict[str, Any]] = []
+    for item in custom_raw:
+        if not isinstance(item, dict):
+            raise ValueError("Serviço personalizado inválido.")
+        for name in ("key", "name", "login_url"):
+            if not isinstance(item.get(name), str):
+                raise ValueError("Serviço personalizado inválido.")
+        aliases = item.get("aliases")
+        if not isinstance(aliases, list) or not all(isinstance(a, str) for a in aliases):
+            raise ValueError("Serviço personalizado inválido.")
+        icon = item.get("icon", "")
+        if not isinstance(icon, str):
+            raise ValueError("Serviço personalizado inválido.")
+        custom.append(
+            {
+                "key": item["key"],
+                "name": item["name"],
+                "aliases": list(aliases),
+                "login_url": item["login_url"],
+                "icon": icon,
+            }
+        )
+    for k, v in overrides_raw.items():
+        if not isinstance(k, str) or not isinstance(v, str):
+            raise ValueError("Links alterados inválidos.")
+    return {"custom": custom, "overrides": dict(overrides_raw)}
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -103,11 +143,13 @@ class Vault:
         entries: list[Entry] | None = None,
         categories: list[Category] | None = None,
         settings: Settings | None = None,
+        services: dict[str, Any] | None = None,
     ) -> None:
         self.path = Path(path)
         self.entries: list[Entry] = entries if entries is not None else []
         self.categories: list[Category] = categories if categories is not None else []
         self.settings: Settings = settings if settings is not None else Settings()
+        self.services: dict[str, Any] = services if services is not None else empty_services()
         self._key = key
         self._salt = salt
         self._kdf = dict(kdf_params)
@@ -174,9 +216,10 @@ class Vault:
             else:
                 categories = default_categories()
             settings = Settings.from_dict(data.get("settings"))
+            services = _parse_services(data["services"]) if "services" in data else empty_services()
         except (UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
             raise VaultCorruptedError("Conteúdo do cofre corrompido.") from exc
-        return cls(path, key, salt, params, entries, categories, settings)
+        return cls(path, key, salt, params, entries, categories, settings, services)
 
     # ---- formato ----
     @staticmethod
@@ -207,6 +250,7 @@ class Vault:
                 "entries": [e.to_dict() for e in self.entries],
                 "categories": [c.to_dict() for c in self.categories],
                 "settings": self.settings.to_dict(),
+                "services": self.services,
             },
             ensure_ascii=False,
         ).encode("utf-8")
@@ -356,6 +400,19 @@ class Vault:
             self.settings = previous
             raise
         return self.settings
+
+    # ---- biblioteca de serviços ----
+    def update_services(self, custom: list[dict[str, Any]], overrides: dict[str, str]) -> dict[str, Any]:
+        """Troca serviços personalizados e links alterados e salva; em falha, restaura."""
+        parsed = _parse_services(copy.deepcopy({"custom": custom, "overrides": overrides}))
+        previous = self.services
+        self.services = parsed
+        try:
+            self.save()
+        except BaseException:
+            self.services = previous
+            raise
+        return self.services
 
     def search(self, text: str) -> list[Entry]:
         """Busca sem diferenciar maiúsculas/acentos (nunca na senha)."""

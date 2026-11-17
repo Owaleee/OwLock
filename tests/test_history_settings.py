@@ -373,7 +373,7 @@ def test_summary_has_url_and_history_count(opened):
 # ---- open_url ----
 def test_open_url_ok(opened, opener):
     e = save(opened, url="example.com")["entry"]
-    assert opened.open_url(e["id"]) == {"ok": True}
+    assert opened.open_url(e["id"]) == {"ok": True, "source": "entry"}
     assert opener.calls == ["https://example.com"]
 
 

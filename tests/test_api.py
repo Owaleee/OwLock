@@ -414,6 +414,8 @@ def test_public_surface(api):
         "list_categories", "save_category", "delete_category", "category_options",
         "get_settings", "save_settings", "get_password_history",
         "reveal_history_password", "copy_history_password", "open_url",
+        "lookup_service", "list_services", "save_service", "reset_service",
+        "delete_service", "brand_icons",
     }
 
 
@@ -618,3 +620,262 @@ def test_category_methods_require_unlocked(api):
 def test_category_methods_locked_after_inactivity(opened, clock):
     clock.advance(301)
     err(opened.list_categories(), "locked")
+
+
+# ---- biblioteca de serviços ----
+class Opener:
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, url):
+        self.calls.append(url)
+        return True
+
+
+@pytest.fixture
+def opener():
+    return Opener()
+
+
+@pytest.fixture
+def lib(path, seeded, clock, clip, opener):
+    a = Api(path, clipboard=clip, clock=clock, timer_factory=FakeTimer, url_opener=opener)
+    assert a.unlock(PW)["ok"]
+    return a
+
+
+def new_service(api, **kw):
+    data = {"name": "Portal da Faculdade", "aliases": ["faculdade"],
+            "login_url": "portal.exemplo.edu.br", "icon": ""}
+    data.update(kw)
+    return api.save_service(data)
+
+
+def summary_of(api, service, **extra):
+    r = api.save_entry({"service": service, **extra})
+    assert r["ok"], r
+    return r["entry"]
+
+
+def test_service_methods_require_unlocked(api):
+    for call in (
+        lambda: api.lookup_service("steam"), lambda: api.list_services(),
+        lambda: api.save_service({"name": "x", "login_url": "https://x.com"}),
+        lambda: api.reset_service("steam"), lambda: api.delete_service("steam"),
+    ):
+        err(call(), "locked")
+
+
+def test_brand_icons_without_vault(api):
+    r = api.brand_icons()
+    assert r["ok"] and r["icons"]
+    steam = next(i for i in r["icons"] if i["slug"] == "steam")
+    assert steam["icon_url"] == "icons/brands/steam.svg" and steam["color"].startswith("#")
+    assert set(steam) == {"slug", "title", "icon_url", "color"}
+
+
+def test_lookup_service(lib):
+    r = lib.lookup_service("Epic")
+    assert r["ok"] and r["match"]["key"] == "epicgames"
+    assert set(r["match"]) == {"key", "name", "aliases", "login_url", "default_url", "icon",
+                               "icon_url", "color", "builtin", "customized"}
+    assert r["match"]["icon_url"] == "icons/brands/epicgames.svg"
+    assert r["suggestions"][0]["key"] == "epicgames"
+    r = lib.lookup_service("epi")
+    assert r["match"] is None and r["suggestions"]
+    r = lib.lookup_service("")
+    assert r["match"] is None and r["suggestions"] == []
+    assert lib.lookup_service(None)["match"] is None
+    # sem ícone: icon_url e color nulos
+    outlook = lib.lookup_service("Outlook")["match"]
+    assert outlook["icon_url"] is None and outlook["color"] is None
+
+
+def test_list_services_and_search(lib):
+    r = lib.list_services()
+    assert r["ok"] and len(r["services"]) == 67
+    keys = [s["key"] for s in lib.list_services("steam")["services"]]
+    assert "steam" in keys
+    assert [s["key"] for s in lib.list_services("accounts.google")["services"]][0] == "google"
+    assert lib.list_services("zzzzqqq")["services"] == []
+    assert len(lib.list_services(None)["services"]) == 67
+
+
+def test_save_service_custom_create_and_edit(lib):
+    r = new_service(lib)
+    assert r["ok"]
+    s = r["service"]
+    assert s["key"].startswith("custom-") and not s["builtin"]
+    assert s["login_url"] == "https://portal.exemplo.edu.br"
+    assert lib.lookup_service("faculdade")["match"]["key"] == s["key"]
+    # edição
+    r2 = lib.save_service({"key": s["key"], "name": "Portal", "aliases": ["uni", "uni", " "],
+                           "login_url": "http://portal.exemplo.edu.br/login", "icon": "steam"})
+    assert r2["ok"] and r2["service"]["aliases"] == ["uni"] and r2["service"]["icon_url"]
+    assert len(lib.list_services()["services"]) == 68
+    # persistiu
+    other = Api(lib._path, clipboard=FakeClipboard(), clock=FakeClock(), timer_factory=FakeTimer)
+    assert other.unlock(PW)["ok"]
+    assert other.lookup_service("uni")["match"]["name"] == "Portal"
+
+
+def test_save_service_errors(lib):
+    base = {"name": "Novo", "aliases": [], "login_url": "https://novo.exemplo", "icon": ""}
+    err(lib.save_service("x"), "invalid_url")
+    err(lib.save_service({**base, "name": "  "}), "name_required")
+    err(lib.save_service({**base, "name": "!!!"}), "name_required")
+    err(lib.save_service({**base, "name": "x" * 41}), "name_too_long")
+    err(lib.save_service({**base, "aliases": ["y" * 41]}), "name_too_long")
+    err(lib.save_service({**base, "aliases": [f"a{i}" for i in range(11)]}), "too_many")
+    for bad in ("javascript:alert(1)", "ftp://x.com", "", "   ", None, "a b"):
+        err(lib.save_service({**base, "login_url": bad}), "invalid_url")
+    err(lib.save_service({**base, "login_url": "https://x.com/" + "a" * 2100}), "invalid_url")
+    for bad in ("none", "nao-existe", 5):
+        err(lib.save_service({**base, "icon": bad}), "invalid_icon")
+    err(lib.save_service({**base, "key": "custom-inexistente"}), "not_found")
+    err(lib.save_service({**base, "key": "naoexiste"}), "not_found")
+    # nome igual a embutido (nome e apelido), com normalize
+    err(lib.save_service({**base, "name": "STEAM"}), "name_exists")
+    err(lib.save_service({**base, "name": "Epic"}), "name_exists")
+    err(lib.save_service({**base, "name": "gov br"}), "name_exists")
+    assert len(lib.list_services()["services"]) == 67
+
+
+def test_save_service_name_exists_among_custom_except_self(lib):
+    s = new_service(lib)["service"]
+    err(new_service(lib, name="portal da faculdade", aliases=[]), "name_exists")
+    err(new_service(lib, name="Faculdade", aliases=[]), "name_exists")  # apelido de outro
+    ok = lib.save_service({"key": s["key"], "name": "Portal da Faculdade", "aliases": ["faculdade"],
+                           "login_url": "https://novo.exemplo", "icon": ""})
+    assert ok["ok"]
+
+
+def test_save_service_too_many_counts_custom_only(lib, monkeypatch):
+    monkeypatch.setattr("owlock.app.api._MAX_CUSTOM_SERVICES", 2)
+    assert new_service(lib, name="Um", aliases=[])["ok"]
+    two = new_service(lib, name="Dois", aliases=[])
+    assert two["ok"]
+    err(new_service(lib, name="Tres", aliases=[]), "too_many")
+    # editar existente continua permitido
+    assert lib.save_service({"key": two["service"]["key"], "name": "Dois", "aliases": [],
+                             "login_url": "https://dois.exemplo"})["ok"]
+
+
+def test_builtin_override_and_reset(lib):
+    r = lib.save_service({"key": "steam", "name": "ignorado", "aliases": ["zz"],
+                          "icon": "none", "login_url": "meu.exemplo/steam"})
+    assert r["ok"]
+    s = r["service"]
+    assert s["login_url"] == "https://meu.exemplo/steam" and s["customized"] and s["builtin"]
+    assert s["name"] == "Steam" and "zz" not in s["aliases"] and s["icon"] == "steam"
+    err(lib.save_service({"key": "steam", "login_url": "ftp://x.com"}), "invalid_url")
+    assert lib._vault.services["overrides"] == {"steam": "https://meu.exemplo/steam"}
+    # voltar manualmente ao padrão remove o override
+    default = s["default_url"]
+    back = lib.save_service({"key": "steam", "login_url": default})
+    assert back["ok"] and not back["service"]["customized"]
+    assert lib._vault.services["overrides"] == {}
+    # reset
+    lib.save_service({"key": "steam", "login_url": "https://outro.exemplo"})
+    r = lib.reset_service("steam")
+    assert r["ok"] and not r["service"]["customized"] and r["service"]["login_url"] == default
+    assert lib._vault.services["overrides"] == {}
+    assert lib.reset_service("steam")["ok"]  # idempotente
+    err(lib.reset_service("naoexiste"), "not_found")
+    custom_key = new_service(lib)["service"]["key"]
+    err(lib.reset_service(custom_key), "not_found")
+    err(lib.reset_service(None), "not_found")
+
+
+def test_delete_service(lib):
+    key = new_service(lib)["service"]["key"]
+    assert lib.delete_service(key) == {"ok": True}
+    assert lib.lookup_service("faculdade")["match"] is None
+    err(lib.delete_service(key), "not_found")
+    err(lib.delete_service("steam"), "builtin_service")
+    err(lib.delete_service("naoexiste"), "not_found")
+    assert any(s["key"] == "steam" for s in lib.list_services()["services"])
+
+
+def test_service_save_failed(lib, monkeypatch):
+    def boom():
+        raise OSError("disco cheio")
+
+    monkeypatch.setattr(lib._vault, "save", boom)
+    err(new_service(lib), "save_failed")
+    err(lib.save_service({"key": "steam", "login_url": "https://outro.exemplo"}), "save_failed")
+    assert lib._vault.services == {"custom": [], "overrides": {}}
+    assert lib.list_services()["services"][0]["customized"] is False
+
+
+def test_entry_icon_automatic_none_manual(lib):
+    auto = summary_of(lib, "Epic Games")
+    assert auto["icon"] == "" and auto["service_key"] == "epicgames"
+    assert auto["icon_url"] == "icons/brands/epicgames.svg" and auto["icon_color"].startswith("#")
+    none = summary_of(lib, "Steam", icon="none")
+    assert none["icon"] == "none" and none["icon_url"] is None and none["icon_color"] is None
+    assert none["service_key"] == "steam"
+    manual = summary_of(lib, "Qualquer coisa", icon="github")
+    assert manual["icon_url"] == "icons/brands/github.svg" and manual["service_key"] is None
+    unknown = summary_of(lib, "Sem biblioteca xyz")
+    assert unknown["icon_url"] is None and unknown["icon_color"] is None and unknown["service_key"] is None
+    # reconhecido mas serviço sem ícone
+    outlook = summary_of(lib, "Outlook")
+    assert outlook["service_key"] == "outlook" and outlook["icon_url"] is None
+
+
+def test_save_entry_invalid_icon_and_edit_keeps(lib):
+    for bad in ("nao-existe", "../x", 3, "None"):
+        err(lib.save_entry({"service": "A", "icon": bad}), "invalid_icon")
+    e = summary_of(lib, "A", icon="steam")
+    edited = lib.save_entry({"id": e["id"], "service": "A2"})["entry"]
+    assert edited["icon"] == "steam"  # sem a chave "icon" na edição, mantém
+    assert lib.save_entry({"id": e["id"], "service": "A2", "icon": ""})["entry"]["icon"] == ""
+
+
+def test_entry_summary_uses_custom_services_and_list_entries(lib):
+    s = new_service(lib, icon="discord")["service"]
+    e = summary_of(lib, "Faculdade")
+    assert e["service_key"] == s["key"] and e["icon_url"] == "icons/brands/discord.svg"
+    listed = {x["service"]: x for x in lib.list_entries()["entries"]}
+    assert listed["Faculdade"]["service_key"] == s["key"]
+    assert lib.get_entry(e["id"])["entry"]["service_key"] == s["key"]
+
+
+def test_summary_stale_icon_slug_is_ignored(lib):
+    e = summary_of(lib, "A")
+    lib._vault.entries[-1].icon = "slug-removido"
+    got = lib.get_entry(e["id"])["entry"]
+    assert got["icon"] == "slug-removido" and got["icon_url"] is None
+
+
+def test_open_url_library_fallback(lib, opener):
+    e = summary_of(lib, "Netflix")
+    r = lib.open_url(e["id"])
+    assert r == {"ok": True, "source": "library"}
+    assert opener.calls == [lib.lookup_service("netflix")["match"]["login_url"]]
+    assert opener.calls[0] == "https://www.netflix.com/login"
+
+
+def test_open_url_prefers_entry_url_and_uses_overrides(lib, opener):
+    own = summary_of(lib, "Netflix", url="netflix.exemplo/minha")
+    assert lib.open_url(own["id"]) == {"ok": True, "source": "entry"}
+    assert opener.calls[-1] == "https://netflix.exemplo/minha"
+    lib.save_service({"key": "netflix", "login_url": "https://alt.exemplo/login"})
+    bare = summary_of(lib, "NETFLIX")
+    assert lib.open_url(bare["id"])["source"] == "library"
+    assert opener.calls[-1] == "https://alt.exemplo/login"
+
+
+def test_open_url_no_match_no_url(lib, opener):
+    e = summary_of(lib, "Sem biblioteca xyz")
+    err(lib.open_url(e["id"]), "no_url")
+    assert opener.calls == []
+
+
+def test_open_url_library_custom_invalid_url_is_refused(lib, opener):
+    key = new_service(lib)["service"]["key"]
+    lib._vault.services["custom"][0]["login_url"] = "javascript:alert(1)"
+    e = summary_of(lib, "Faculdade")
+    err(lib.open_url(e["id"]), "invalid_url")
+    assert opener.calls == [] and key
