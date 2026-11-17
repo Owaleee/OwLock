@@ -17,6 +17,10 @@ const ICONS = {
   back: [['path', { d: 'M15 6l-6 6 6 6' }]],
   close: [['path', { d: 'M6 6l12 12M18 6L6 18' }]],
   chevron: [['path', { d: 'M9 6l6 6-6 6' }]],
+  chevronLeft: [['path', { d: 'M15 6l-6 6 6 6' }]],
+  tag: [['path', { d: 'M3 3h8.2a2 2 0 0 1 1.4.6l8 8a2 2 0 0 1 0 2.8l-6.2 6.2a2 2 0 0 1-2.8 0l-8-8A2 2 0 0 1 3 11.2V3z' }], ['circle', { cx: 7.5, cy: 7.5, r: 1.3 }]],
+  external: [['path', { d: 'M14 4h6v6M20 4l-9 9M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4' }]],
+  check: [['path', { d: 'M5 12.5l4.5 4.5L19 7.5' }]],
   none: [['circle', { cx: 12, cy: 12, r: 8 }], ['path', { d: 'M6.3 17.7L17.7 6.3' }]],
   user: [['circle', { cx: 12, cy: 8, r: 4 }], ['path', { d: 'M4 21a8 8 0 0 1 16 0' }]],
   briefcase: [['rect', { x: 3, y: 7, width: 18, height: 13, rx: 3 }], ['path', { d: 'M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M3 13h18' }]],
@@ -124,6 +128,9 @@ const state = {
   loadSeq: 0,
   categories: [],
   categoryFilter: '', // '' = todas, 'none' = sem categoria, ou id
+  settings: null, // { settings, options }
+  history: null, // { id, created_at, history }
+  histReveal: null, // { id, index, text }
   options: { colors: [], icons: [] },
   gen: null,
 };
@@ -132,15 +139,17 @@ let ui = {}; // referências de DOM da tela principal
 let tickTimer = null;
 let revealTimer = null;
 let copyTimer = null;
+let histTimer = null;
 
 function wipeState() {
   clearInterval(tickTimer);
   clearTimeout(revealTimer);
   clearTimeout(copyTimer);
+  clearTimeout(histTimer);
   Object.assign(state, {
     unlocked: false, view: 'vault', screen: 'list', filter: 'all', query: '', entries: [],
     stats: { ...EMPTY_STATS }, selected: null, revealed: null, copied: null, gen: null, deadline: 0,
-    categories: [], categoryFilter: '',
+    categories: [], categoryFilter: '', settings: null, history: null, histReveal: null,
   });
   ui = {};
   root.replaceChildren();
@@ -152,7 +161,8 @@ function wipeState() {
 
 function toast(message, kind = 'ok') {
   const el = h('div', { class: 'toast' }, led(kind === 'warn' ? 'red' : 'mint'), h('span', { text: message }));
-  toastRoot.append(el);
+  // um aviso por vez, como a Dynamic Island: o novo substitui o anterior
+  toastRoot.replaceChildren(el);
   setTimeout(() => el.classList.add('leaving'), 2500);
   setTimeout(() => el.remove(), 2800);
 }
@@ -470,7 +480,7 @@ async function enterMain(status) {
   state.status = status;
   buildShell();
   startTimer(typeof status.seconds_left === 'number' ? status.seconds_left : status.auto_lock_seconds || 300);
-  await Promise.all([loadOptions(), loadCategories()]);
+  await Promise.all([loadOptions(), loadCategories(), loadSettings()]);
   await loadEntries();
   if (state.entries.length && !state.selected) {
     state.selected = state.entries[0];
@@ -490,6 +500,7 @@ function buildShell() {
   const rail = h('nav', { class: 'rail', 'aria-label': 'Navegação' },
     logoImg('rail-logo', 40),
     railButton('vault', 'vault', 'Cofre', () => setView('vault')),
+    railButton('categories', 'tag', 'Categorias', () => setView('categories')),
     railButton('generator', 'generator', 'Gerador', () => setView('generator')),
     railButton('settings', 'sliders', 'Ajustes', () => setView('settings')),
     h('div', { class: 'rail-spacer' }),
@@ -534,11 +545,7 @@ function buildListColumn() {
   ui.tabsBox = h('div', { class: 'segmented', role: 'tablist', 'aria-label': 'Filtro', 'data-index': '0' },
     h('span', { class: 'seg-thumb', 'aria-hidden': 'true' }), ui.tabs);
   ui.catStrip = h('div', { class: 'cat-strip', id: 'cat-strip', role: 'group', 'aria-label': 'Categorias' });
-  ui.catStrip.addEventListener('wheel', (event) => {
-    if (ui.catStrip.scrollWidth <= ui.catStrip.clientWidth || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-    ui.catStrip.scrollLeft += event.deltaY;
-    event.preventDefault();
-  }, { passive: false });
+  ui.catStripWrap = makeScrollStrip(ui.catStrip);
   ui.statsMobile = h('div', { class: 'stats stats-mobile' });
   ui.rows = h('div', { class: 'rows', id: 'entry-list' });
 
@@ -549,7 +556,7 @@ function buildListColumn() {
     h('div', { class: 'list-head' }, h('h2', { text: 'Cofre' }), ui.timer),
     ui.statsMobile,
     h('label', { class: 'search' }, icon('search', 16), ui.search, ui.searchClear),
-    ui.catStrip,
+    ui.catStripWrap,
     ui.tabsBox,
     ui.rows,
     newButton);
@@ -559,22 +566,29 @@ function buildMain() {
   ui.statsDesktop = h('div', { class: 'stats stats-desktop' });
   ui.detail = h('div', { class: 'detail-slot', id: 'detail' });
   ui.paneVault = h('div', { class: 'pane pane-vault' }, ui.statsDesktop, ui.detail);
+  ui.paneCats = h('div', { class: 'pane pane-categories' });
   ui.paneGen = h('div', { class: 'pane pane-generator' });
   ui.paneSettings = h('div', { class: 'pane pane-settings' });
-  return h('main', { class: 'main' }, ui.paneVault, ui.paneGen, ui.paneSettings);
+  return h('main', { class: 'main' }, ui.paneVault, ui.paneCats, ui.paneGen, ui.paneSettings);
 }
 
 function setView(view) {
-  if (state.view === 'vault' && view !== 'vault') hideReveal();
+  if (state.view === 'vault' && view !== 'vault') {
+    hideReveal();
+    clearHistReveal();
+  }
   state.view = view;
   ui.shell.dataset.view = view;
   for (const button of ui.shell.querySelectorAll('.rail-btn[data-view]')) {
     if (button.dataset.view === view) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   }
+  ui.paneCats.replaceChildren();
   ui.paneGen.replaceChildren();
   ui.paneSettings.replaceChildren();
+  ui.catView = null;
   state.gen = null;
+  if (view === 'categories') buildCategoriesView();
   if (view === 'generator') buildGenerator();
   if (view === 'settings') buildSettings();
 }
@@ -706,7 +720,10 @@ function monogram(entry) {
 function selectEntry(id, openDetail = false) {
   const entry = state.entries.find((item) => item.id === id);
   if (!entry) return;
-  if (state.selected?.id !== id) hideReveal();
+  if (state.selected?.id !== id) {
+    hideReveal();
+    clearHistReveal();
+  }
   state.selected = entry;
   for (const row of ui.rows.querySelectorAll('.row')) row.classList.toggle('is-selected', row.dataset.id === id);
   renderDetail();
@@ -736,6 +753,7 @@ function renderDetail({ first = false } = {}) {
   const twofaText = twofaOn ? (entry.twofa_app ? `Ativada · ${entry.twofa_app}` : 'Ativada') : 'Desativada';
   const score = entry.strength.score;
 
+  ui.historySlot = h('div', { class: 'settings-stack', id: 'history-slot' });
   ui.revealButton = h('button', { class: 'btn btn-chip', id: 'reveal-toggle', type: 'button', 'aria-controls': 'password-display', onClick: toggleReveal });
   ui.pwText = h('div', { class: 'pw-text', id: 'password-display' });
 
@@ -754,6 +772,12 @@ function renderDetail({ first = false } = {}) {
       h('span', { class: 'row-k', text: 'Verificação em 2 etapas' }),
       h('span', { class: twofaOn ? 'row-v' : 'row-v warn', text: twofaText })),
   ];
+  if (entry.url) {
+    infoRows.splice(1, 0, h('div', { class: 'group-row', id: 'detail-site-row' },
+      h('span', { class: 'row-k', text: 'Site' }),
+      h('span', { class: 'row-v', id: 'detail-site', text: siteHost(entry.url) }),
+      h('button', { class: 'btn btn-chip with-icon', id: 'open-site', type: 'button', onClick: () => openSite(entry) }, icon('external', 14, 2.2), 'Abrir site')));
+  }
   if (entry.notes) {
     infoRows.push(h('div', { class: 'group-row stacked' },
       h('span', { class: 'row-k', text: 'Notas' }),
@@ -771,7 +795,9 @@ function renderDetail({ first = false } = {}) {
       h('button', { class: 'btn btn-ghost small', id: 'edit-entry', type: 'button', onClick: () => openEntryForm(entry) }, 'Editar')),
     h('div', { class: 'group' }, infoRows),
     h('div', { class: 'pw-box' },
-      h('div', { class: 'pw-head' }, h('span', { class: 'k', text: 'Senha' }), ui.revealButton),
+      h('div', { class: 'pw-head' }, h('span', { class: 'k', text: 'Senha' }),
+        entry.history_count > 0 ? h('span', { class: 'badge-pill', id: 'history-badge', text: `${entry.history_count} ${plural(entry.history_count, 'versão anterior', 'versões anteriores')}` }) : null,
+        ui.revealButton),
       ui.pwText,
       h('div', { class: `meter ${strengthClass(score)}` },
         h('div', { class: 'meter-track' }, barFill),
@@ -779,11 +805,109 @@ function renderDetail({ first = false } = {}) {
       h('div', { class: 'pw-actions' },
         copyButton,
         h('button', { class: 'btn btn-ghost', id: 'copy-username', type: 'button', onClick: () => copyField(entry, 'username') }, 'Copiar login'),
-        h('button', { class: 'btn btn-ghost danger', id: 'delete-entry', type: 'button', onClick: () => confirmDelete(entry) }, 'Excluir'))));
+        h('button', { class: 'btn btn-ghost danger', id: 'delete-entry', type: 'button', onClick: () => confirmDelete(entry) }, 'Excluir'))),
+    ui.historySlot);
 
   if (first) setDelay(card, 140);
   ui.detail.append(card);
   paintPassword(false);
+  loadHistory(entry);
+}
+
+/* ---------- site e histórico de senhas ---------- */
+
+function siteHost(url) {
+  try {
+    return new URL(url).host || url;
+  } catch {
+    return url;
+  }
+}
+
+async function openSite(entry) {
+  const r = await call('open_url', entry.id);
+  if (r.ok) toast('Abrindo o site...');
+  else if (r.error !== 'locked') toast(apiMessage(r, 'Não foi possível abrir o site.'), 'warn');
+}
+
+const DATE_FORMAT = new Intl.DateTimeFormat('pt-BR', { day: 'numeric', month: 'short', year: 'numeric' });
+
+function shortDate(iso) {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? '' : DATE_FORMAT.format(date);
+}
+
+function clearHistReveal() {
+  clearTimeout(histTimer);
+  if (!state.histReveal) return;
+  state.histReveal = null;
+  if (ui.historySlot && ui.historySlot.isConnected) paintHistory();
+}
+
+async function loadHistory(entry) {
+  state.history = null;
+  const r = await call('get_password_history', entry.id);
+  if (!r.ok || state.selected?.id !== entry.id || !ui.historySlot || !ui.historySlot.isConnected) return;
+  state.history = { id: entry.id, created_at: r.created_at, history: r.history || [] };
+  paintHistory();
+}
+
+function paintHistory(animateIndex = -1) {
+  const data = state.history;
+  if (!data || !ui.historySlot) return;
+  const entryId = data.id;
+  const rows = [h('div', { class: 'group-row', id: 'history-created' },
+    h('span', { class: 'row-k grow', text: 'Criada em' }),
+    h('span', { class: 'row-v', text: shortDate(data.created_at) }))];
+  if (!data.history.length) {
+    rows.push(h('div', { class: 'group-row', id: 'history-empty' }, h('span', { class: 'row-k grow', text: 'Esta senha nunca foi alterada.' })));
+  }
+  for (const item of data.history) {
+    const shown = state.histReveal && state.histReveal.id === entryId && state.histReveal.index === item.index;
+    const pw = h('div', { class: 'hist-pw', id: `hist-pw-${item.index}` });
+    if (shown) {
+      pw.replaceChildren(...[...state.histReveal.text].map((ch, i) => {
+        const span = h('span', { class: animateIndex === item.index ? 'ow-char' : '', text: ch });
+        if (animateIndex === item.index) setDelay(span, i * 28);
+        return span;
+      }));
+    } else {
+      pw.append(h('span', { class: 'masked', 'aria-label': 'Senha oculta', text: '•••' }));
+    }
+    rows.push(h('div', { class: 'group-row hist-row', id: `hist-row-${item.index}` },
+      h('span', { class: `led ${strengthTone(item.strength.score)}`, role: 'img', 'aria-label': `Força: ${item.strength.label}` }),
+      h('div', { class: 'hist-info' },
+        h('span', { class: 'hist-title', text: 'Senha anterior' }),
+        h('span', { class: 'hist-sub', text: `alterada em ${shortDate(item.changed_at)}` }),
+        pw),
+      h('div', { class: 'hist-actions' },
+        h('button', { class: 'btn btn-chip', id: `hist-show-${item.index}`, type: 'button', 'aria-pressed': shown ? 'true' : 'false', onClick: () => toggleHistReveal(entryId, item.index) }, shown ? 'Ocultar' : 'Mostrar'),
+        h('button', { class: 'btn btn-chip', id: `hist-copy-${item.index}`, type: 'button', onClick: () => copyHistory(entryId, item.index) }, 'Copiar'))));
+  }
+  ui.historySlot.replaceChildren(h('h2', { class: 'group-title', text: 'Histórico de senhas' }), h('div', { class: 'group', id: 'history-group' }, rows));
+}
+
+async function toggleHistReveal(entryId, index) {
+  if (state.histReveal && state.histReveal.id === entryId && state.histReveal.index === index) {
+    clearHistReveal();
+    return;
+  }
+  const r = await call('reveal_history_password', entryId, index);
+  if (!r.ok) {
+    if (r.error !== 'locked') toast(apiMessage(r), 'warn');
+    return;
+  }
+  if (state.selected?.id !== entryId) return;
+  state.histReveal = { id: entryId, index, text: r.password };
+  paintHistory(index);
+  clearTimeout(histTimer);
+  histTimer = setTimeout(clearHistReveal, REVEAL_AUTOHIDE_MS);
+}
+
+async function copyHistory(entryId, index) {
+  const r = await call('copy_history_password', entryId, index);
+  if (r.ok) toast('Senha anterior copiada');
+  else if (r.error !== 'locked') toast(apiMessage(r), 'warn');
 }
 
 /* Mostra a senha (com animação caractere a caractere) ou os pontos. */
@@ -900,7 +1024,7 @@ function openEntryForm(entry) {
   syncTwofa();
 
   let categoryId = editing ? entry.category_id || '' : (state.categoryFilter && state.categoryFilter !== 'none' ? state.categoryFilter : '');
-  const categoryPicker = h('div', { class: 'cat-strip in-form', id: 'form-categories', role: 'radiogroup', 'aria-label': 'Categoria' });
+  const categoryPicker = h('div', { class: 'cat-wrap-list', id: 'form-categories', role: 'radiogroup', 'aria-label': 'Categoria' });
   const paintCategoryPicker = () => {
     const choose = (id) => {
       categoryId = id;
@@ -913,6 +1037,9 @@ function openEntryForm(entry) {
     })));
   };
   paintCategoryPicker();
+
+  const urlInput = h('input', { class: 'row-input', id: 'form-url', type: 'text', autocomplete: 'off', spellcheck: 'false', inputmode: 'url', placeholder: 'exemplo.com', value: editing ? entry.url || '' : '' });
+  const urlError = h('p', { class: 'msg error', id: 'form-url-error', role: 'alert' });
 
   const notes = h('textarea', { class: 'row-input', id: 'form-notes', rows: '3', value: editing ? entry.notes || '' : '' });
   const error = h('p', { class: 'msg error', id: 'form-error', role: 'alert' });
@@ -960,7 +1087,9 @@ function openEntryForm(entry) {
   const form = h('form', { novalidate: '' },
     h('div', { class: 'group' },
       h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'form-service', text: 'Serviço *' }), serviceInput),
-      h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'form-username', text: 'Login / e-mail' }), userInput)),
+      h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'form-username', text: 'Login / e-mail' }), userInput),
+      h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'form-url', text: 'Site' }), urlInput)),
+    urlError,
     h('div', { class: 'group' },
       h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'form-password', text: 'Senha' }), pwInput, showButton, genButton)),
     h('div', { class: 'form-meter' }, meter.el),
@@ -978,6 +1107,8 @@ function openEntryForm(entry) {
     if (submit.disabled) return;
     error.textContent = '';
     serviceInput.parentElement.classList.remove('invalid');
+    urlInput.parentElement.classList.remove('invalid');
+    urlError.textContent = '';
     const service = serviceInput.value.trim();
     if (!service) {
       serviceInput.parentElement.classList.add('invalid');
@@ -991,6 +1122,7 @@ function openEntryForm(entry) {
       username: userInput.value.trim(),
       password: editing && typed === '' ? null : typed,
       category_id: categoryId,
+      url: urlInput.value.trim(),
       has_2fa: twofaBox.checked,
       twofa_app: twofaBox.checked ? twofaApp.value.trim() : '',
       notes: notes.value,
@@ -999,14 +1131,20 @@ function openEntryForm(entry) {
     submit.disabled = true;
     submit.textContent = 'Salvando...';
     const r = await call('save_entry', data);
-    pwInput.value = '';
     if (!r.ok) {
       if (r.error === 'locked') return;
       submit.disabled = false;
       submit.textContent = 'Salvar';
+      if (r.error === 'invalid_url') {
+        urlInput.parentElement.classList.add('invalid');
+        urlError.textContent = apiMessage(r, 'Endereço do site inválido.');
+        urlInput.focus();
+        return;
+      }
       error.textContent = apiMessage(r, 'Não foi possível salvar a conta.');
       return;
     }
+    pwInput.value = '';
     closeModal();
     await afterSave(r.entry);
   });
@@ -1021,6 +1159,7 @@ function openEntryForm(entry) {
 
 async function afterSave(saved) {
   hideReveal();
+  clearHistReveal();
   state.query = '';
   state.filter = 'all';
   ui.search.value = '';
@@ -1049,7 +1188,7 @@ async function loadCategories() {
   if (!r.ok || !state.unlocked) return;
   state.categories = r.categories;
   renderCategories();
-  if (state.view === 'settings' && ui.catSettings) renderCategorySettings();
+  if (state.view === 'categories' && ui.catView) renderCategoryGroup();
 }
 
 function tint(el, hex) {
@@ -1072,7 +1211,7 @@ function catPill({ name, hex, iconName, count = null, selected = false, onClick,
 }
 
 function renderCategories() {
-  if (!ui.catStrip) return;
+  if (!ui.catStrip || !ui.catStrip.isConnected) return;
   const keep = ui.catStrip.scrollLeft;
   const current = state.categoryFilter;
   const pills = [catPill({
@@ -1108,6 +1247,7 @@ function renderCategories() {
       strip.scrollTo({ left: Math.max(0, left - 24), behavior: 'smooth' });
     }
   }
+  ui.catStripWrap?.update();
 }
 
 function setCategoryFilter(id) {
@@ -1130,8 +1270,16 @@ function detailCategory(category) {
   return chip;
 }
 
-/* Ajustes > Categorias */
-function renderCategorySettings() {
+/* Tela Categorias */
+function buildCategoriesView() {
+  ui.catView = h('div', { class: 'settings-stack ow-in', id: 'cat-view' });
+  renderCategoryGroup();
+  ui.paneCats.replaceChildren(
+    h('div', { class: 'page-title' }, h('h1', { text: 'Categorias' }), h('p', { text: 'Organize as contas com cores e ícones.' })),
+    ui.catView);
+}
+
+function renderCategoryGroup() {
   const rows = state.categories.map((category) => {
     const tile = h('span', { class: 'cat-tile', 'aria-hidden': 'true' }, icon(category.icon, 18));
     tile.style.setProperty('--cat', category.color_hex);
@@ -1146,9 +1294,75 @@ function renderCategorySettings() {
   rows.push(h('button', { class: 'btn group-row cat-row cat-new', id: 'settings-new-category', type: 'button', onClick: () => openCategoryEditor(null) },
     h('span', { class: 'cat-tile mint', 'aria-hidden': 'true' }, icon('plus', 18, 2.4)),
     h('span', { class: 'row-k grow', text: 'Nova categoria' })));
-  ui.catSettings.replaceChildren(
-    h('h2', { class: 'group-title', text: 'Categorias' }),
-    h('div', { class: 'group', id: 'category-group' }, rows));
+  ui.catView.replaceChildren(h('div', { class: 'group', id: 'category-group' }, rows));
+}
+
+/* Faixa rolável: setas, roda vertical e arrastar com o mouse. */
+function makeScrollStrip(strip) {
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const left = h('button', { class: 'btn strip-arrow left', id: 'cat-prev', type: 'button', 'aria-label': 'Categorias anteriores', tabindex: '-1' }, icon('chevronLeft', 16, 2.4));
+  const right = h('button', { class: 'btn strip-arrow right', id: 'cat-next', type: 'button', 'aria-label': 'Próximas categorias', tabindex: '-1' }, icon('chevron', 16, 2.4));
+  const wrap = h('div', { class: 'cat-strip-wrap' }, strip, left, right);
+
+  const update = () => {
+    const max = strip.scrollWidth - strip.clientWidth;
+    const showLeft = strip.scrollLeft > 2;
+    const showRight = max > 2 && strip.scrollLeft < max - 2;
+    for (const [button, on] of [[left, showLeft], [right, showRight]]) {
+      button.classList.toggle('is-on', on);
+      button.tabIndex = on ? 0 : -1;
+      button.setAttribute('aria-hidden', on ? 'false' : 'true');
+    }
+  };
+  const nudge = (direction) => strip.scrollBy({ left: direction * Math.max(120, strip.clientWidth * 0.7), behavior: reduce.matches ? 'auto' : 'smooth' });
+  left.addEventListener('click', () => nudge(-1));
+  right.addEventListener('click', () => nudge(1));
+  strip.addEventListener('scroll', update, { passive: true });
+  if (typeof ResizeObserver === 'function') new ResizeObserver(update).observe(strip);
+  window.addEventListener('resize', update);
+
+  strip.addEventListener('wheel', (event) => {
+    if (strip.scrollWidth <= strip.clientWidth || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+    strip.scrollLeft += event.deltaY;
+    event.preventDefault();
+  }, { passive: false });
+
+  let drag = null;
+  let suppressClick = false;
+  strip.addEventListener('pointerdown', (event) => {
+    if (event.pointerType !== 'mouse' || event.button !== 0) return;
+    drag = { x: event.clientX, left: strip.scrollLeft, moved: false, id: event.pointerId };
+  });
+  strip.addEventListener('pointermove', (event) => {
+    if (!drag || drag.id !== event.pointerId) return;
+    const dx = event.clientX - drag.x;
+    if (!drag.moved && Math.abs(dx) > 5) {
+      drag.moved = true;
+      strip.classList.add('dragging');
+      strip.setPointerCapture(event.pointerId);
+    }
+    if (drag.moved) strip.scrollLeft = drag.left - dx;
+  });
+  const endDrag = (event) => {
+    if (!drag || drag.id !== event.pointerId) return;
+    if (drag.moved) {
+      suppressClick = true;
+      setTimeout(() => { suppressClick = false; }, 0);
+      strip.classList.remove('dragging');
+    }
+    drag = null;
+  };
+  strip.addEventListener('pointerup', endDrag);
+  strip.addEventListener('pointercancel', endDrag);
+  strip.addEventListener('click', (event) => {
+    if (suppressClick) {
+      event.stopPropagation();
+      event.preventDefault();
+    }
+  }, true);
+
+  wrap.update = update;
+  return wrap;
 }
 
 /* Editor de categoria (modal no desktop, sheet no celular) */
@@ -1453,30 +1667,117 @@ function buildSettings() {
     }
   });
 
-  const minutes = Math.round((state.status?.auto_lock_seconds || 300) / 60);
-  ui.catSettings = h('div', { class: 'settings-stack ow-in', id: 'cat-settings' });
-  renderCategorySettings();
+  ui.protection = h('div', { class: 'settings-stack ow-in', id: 'protection' });
+  renderProtection();
+  const catCount = state.categories.length;
   ui.paneSettings.replaceChildren(
     h('div', { class: 'page-title' }, h('h1', { text: 'Ajustes' }), h('p', { text: 'Segurança e informações do cofre.' })),
     h('div', { class: 'settings-stack ow-in' }, h('h2', { class: 'group-title', text: 'Senha mestra' }), form),
-    ui.catSettings,
+    h('div', { class: 'settings-stack ow-in' },
+      h('h2', { class: 'group-title', text: 'Organização' }),
+      h('div', { class: 'group' },
+        h('button', { class: 'btn group-row cat-row', id: 'settings-categories', type: 'button', onClick: () => setView('categories') },
+          h('span', { class: 'cat-tile mint', 'aria-hidden': 'true' }, icon('tag', 18)),
+          h('span', { class: 'row-k grow', text: 'Categorias' }),
+          h('span', { class: 'cat-row-count', text: String(catCount) }),
+          h('span', { class: 'chev', 'aria-hidden': 'true' }, icon('chevron', 16, 2.4))))),
+    ui.protection,
     h('div', { class: 'settings-stack ow-in' },
       h('h2', { class: 'group-title', text: 'Cofre' }),
       h('div', { class: 'group' },
         h('div', { class: 'group-row stacked' },
           h('span', { class: 'row-k', text: 'Arquivo do cofre' }),
-          h('span', { class: 'row-v path', id: 'vault-path', text: state.status?.vault_path || '' })))),
-    h('div', { class: 'settings-stack ow-in' },
-      h('h2', { class: 'group-title', text: 'Proteção automática' }),
-      h('div', { class: 'group' },
-        h('div', { class: 'group-row' },
-          h('span', { class: 'row-k grow', text: 'Bloqueio automático' }),
-          h('span', { class: 'row-v', text: `${minutes} ${plural(minutes, 'minuto', 'minutos')}` })),
-        h('div', { class: 'group-row' },
-          h('span', { class: 'row-k grow', text: 'Limpar área de transferência' }),
-          h('span', { class: 'row-v', text: '30 segundos' }))),
-      h('p', { class: 'hint', text: `O cofre bloqueia sozinho após ${minutes} ${plural(minutes, 'minuto', 'minutos')} sem uso, e a área de transferência é limpa 30 segundos depois de copiar uma senha ou login.` })));
+          h('span', { class: 'row-v path', id: 'vault-path', text: state.status?.vault_path || '' })))));
   current.input.focus();
+}
+
+/* ======================================================================
+   Proteção automática (tempos escolhidos pelo usuário)
+   ====================================================================== */
+
+const PROTECTION = [
+  { key: 'auto_lock_minutes', id: 'set-lock', title: 'Bloqueio automático', prompt: 'Bloquear após' },
+  { key: 'clipboard_clear_seconds', id: 'set-clip', title: 'Limpar área de transferência', prompt: 'Limpar a área de transferência após' },
+];
+
+async function loadSettings() {
+  const r = await call('get_settings');
+  if (r.ok) state.settings = { settings: r.settings, options: r.options };
+}
+
+function optionLabel(key) {
+  const config = state.settings;
+  if (!config) return '';
+  const value = config.settings[key];
+  return config.options[key]?.find((option) => option.value === value)?.label || String(value);
+}
+
+function renderProtection() {
+  if (!ui.protection) return;
+  const rows = PROTECTION.map((item) => h('button', {
+    class: 'btn group-row cat-row', id: `${item.id}-row`, type: 'button', onClick: () => openSettingPicker(item),
+  }, h('span', { class: 'row-k grow', text: item.title }),
+  h('span', { class: 'cat-row-count', id: `${item.id}-value`, text: optionLabel(item.key) }),
+  h('span', { class: 'chev', 'aria-hidden': 'true' }, icon('chevron', 16, 2.4))));
+  const lock = optionLabel('auto_lock_minutes').toLowerCase();
+  const clip = optionLabel('clipboard_clear_seconds').toLowerCase();
+  ui.protection.replaceChildren(
+    h('h2', { class: 'group-title', text: 'Proteção automática' }),
+    h('div', { class: 'group' }, rows),
+    h('p', { class: 'hint', id: 'protection-hint', text: `O cofre bloqueia sozinho após ${lock} sem uso, e a área de transferência é limpa ${clip} depois de copiar uma senha ou login.` }));
+}
+
+/* Seletor estilo iOS: lista agrupada com ✓ na opção atual, em modal (desktop) ou sheet (celular). */
+function openSettingPicker(item) {
+  const config = state.settings;
+  if (!config) return;
+  const options = config.options[item.key] || [];
+  const current = config.settings[item.key];
+  const error = h('p', { class: 'msg error', role: 'alert' });
+  const rows = options.map((option) => {
+    const selected = option.value === current;
+    return h('button', {
+      class: 'btn group-row pick-row', type: 'button', role: 'radio', 'aria-checked': selected ? 'true' : 'false',
+      'data-value': String(option.value), id: `${item.id}-opt-${option.value}`,
+      ...(selected ? { 'data-autofocus': '' } : {}),
+      onClick: () => chooseSetting(item, option.value, error),
+    }, h('span', { class: 'row-k grow', text: option.label }),
+    option.recommended ? h('span', { class: 'badge-rec', text: 'Recomendado' }) : null,
+    h('span', { class: 'tick', 'aria-hidden': 'true' }, selected ? icon('check', 18, 2.6) : null));
+  });
+  const card = h('div', { class: 'modal narrow', 'aria-labelledby': 'picker-title' },
+    h('div', { class: 'modal-head' },
+      h('h2', { id: 'picker-title', text: item.title }),
+      h('button', { class: 'btn btn-icon', type: 'button', 'aria-label': 'Fechar', onClick: closeModal }, icon('close', 18))),
+    h('p', { class: 'hint', text: item.prompt }),
+    h('div', { class: 'group', role: 'radiogroup', 'aria-label': item.title }, rows),
+    error);
+  openModal(card, { dismissOnBackdrop: true });
+}
+
+async function chooseSetting(item, value, errorEl) {
+  const current = state.settings.settings;
+  if (current[item.key] === value) {
+    closeModal();
+    return;
+  }
+  const r = await call('save_settings', { ...current, [item.key]: value });
+  if (!r.ok) {
+    if (r.error !== 'locked') errorEl.textContent = apiMessage(r, 'Não foi possível salvar o ajuste.');
+    return;
+  }
+  state.settings.settings = r.settings;
+  closeModal();
+  renderProtection();
+  const fresh = await call('status');
+  if (fresh.ok) state.status = fresh;
+  const touched = await call('touch');
+  if (touched.ok && typeof touched.seconds_left === 'number') {
+    state.deadline = Date.now() + touched.seconds_left * 1000;
+    state.lastTouch = Date.now();
+    tick();
+  }
+  toast('Ajuste salvo');
 }
 
 /* ======================================================================

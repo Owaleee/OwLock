@@ -20,8 +20,11 @@ O OwLock guarda suas contas em um único arquivo criptografado, protegido por um
 - Busca que não diferencia maiúsculas, minúsculas nem acentos, em serviço, login, aplicativo de 2FA e notas.
 - Gerador de senhas fortes, com tamanho e tipos de caractere escolhidos por você.
 - Troca da senha mestra, que recifra o cofre com um novo salt.
-- Copiar login ou senha para a área de transferência, com contagem visual dos 30 segundos e limpeza automática depois disso.
-- Bloqueio automático após 5 minutos sem uso.
+- Categorias com cor e ícone, filtro por categoria e tela própria para criar e editar.
+- Histórico de senhas: data de criação da conta e cada senha anterior com a data da troca (até 20 versões), com opção de mostrar ou copiar.
+- Site da conta, com botão para abrir no navegador padrão.
+- Copiar login ou senha para a área de transferência, com contagem visual e limpeza automática (10 a 90 segundos; recomendado: 30).
+- Bloqueio automático após um tempo sem uso (1 a 30 minutos; recomendado: 5).
 - Backup automático (`.bak`) da versão anterior do arquivo e gravação atômica, que evita corromper o cofre se o programa for interrompido durante um salvamento.
 
 ## Download (Windows)
@@ -202,6 +205,7 @@ Próximos passos previstos:
 - Importação e exportação em CSV.
 - Categorias para organizar as contas.
 - Ícones das plataformas (Discord, Steam, GitHub...) embutidos no app, sem buscar nada na internet.
+- Preencher login e senha no site com uma extensão de navegador.
 - Formato de cofre v2 com Chave Secreta (para sincronizar com segurança entre computador e celular).
 
 ## Licença

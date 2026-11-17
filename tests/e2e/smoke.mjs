@@ -159,6 +159,47 @@ async function main() {
     const counts = await pillCounts(page);
     if (!('Todas' in counts) || !('Jogos' in counts) || counts.Todas !== '6') fail(`faixa de categorias inesperada: ${JSON.stringify(counts)}`);
     log(`faixa de categorias com contadores ${JSON.stringify(counts)}`);
+    // setas, arrastar e última categoria alcançável
+    if (!(await page.$eval('#cat-strip', (el) => el.scrollWidth > el.clientWidth))) fail('a faixa deveria ter conteúdo escondido em 1280x800');
+    await page.waitForSelector('#cat-next.is-on');
+    await sleep(700); // deixa a rolagem inicial assentar
+    if (await page.$('#cat-prev.is-on')) fail('seta esquerda não deveria aparecer no início');
+    for (let i = 0; i < 10 && (await page.$('#cat-next.is-on')); i += 1) {
+      await page.click('#cat-next');
+      await sleep(500);
+    }
+    const lastVisible = await page.evaluate(() => {
+      const strip = document.querySelector('#cat-strip').getBoundingClientRect();
+      const last = document.querySelector('#cat-add').getBoundingClientRect();
+      return last.right <= strip.right + 1 && last.left >= strip.left;
+    });
+    if (!lastVisible) fail('a última pílula (+) não ficou alcançável pela seta');
+    await page.waitForSelector('#cat-prev.is-on');
+    log('seta › leva até a última categoria; seta ‹ aparece');
+    await shot(page, '15-faixa-setas');
+    for (let i = 0; i < 10 && (await page.$('#cat-prev.is-on')); i += 1) {
+      await page.click('#cat-prev');
+      await sleep(500);
+    }
+    const box = await (await page.$('#cat-strip .cat-pill:nth-child(2)')).boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 - 40, box.y + box.height / 2, { steps: 4 });
+    await page.mouse.move(box.x + box.width / 2 - 120, box.y + box.height / 2, { steps: 6 });
+    await page.mouse.up();
+    await sleep(300);
+    const afterDrag = await page.evaluate(() => ({
+      left: document.querySelector('#cat-strip').scrollLeft,
+      all: document.querySelector('#cat-all').getAttribute('aria-pressed'),
+      pressed: document.querySelectorAll('#cat-strip .cat-pill[aria-pressed="true"]').length,
+    }));
+    if (afterDrag.left <= 0 || afterDrag.all !== 'true' || afterDrag.pressed !== 1) fail(`arrastar a faixa deveria rolar sem clicar: ${JSON.stringify(afterDrag)}`);
+    log('arrastar a faixa rola sem disparar clique');
+    for (let i = 0; i < 10 && (await page.$('#cat-prev.is-on')); i += 1) {
+      await page.click('#cat-prev');
+      await sleep(500);
+    }
+
     await clickCategory(page, 'Jogos');
     await waitRows(page, 3, 'categoria Jogos');
     const games = (await rowNames(page)).join(',');
@@ -204,6 +245,18 @@ async function main() {
     // (f) nova conta
     await page.click('#new-entry');
     await page.waitForSelector('#form-service');
+    const formCats = await page.evaluate(() => {
+      const list = document.querySelector('#form-categories');
+      const card = document.querySelector('.modal').getBoundingClientRect();
+      const pills = [...list.querySelectorAll('.cat-pill')];
+      const rows = new Set(pills.map((p) => Math.round(p.getBoundingClientRect().top)));
+      return {
+        count: pills.length, rows: rows.size, overflow: list.scrollWidth > list.clientWidth + 1,
+        inside: pills.every((p) => { const r = p.getBoundingClientRect(); return r.left >= card.left && r.right <= card.right; }),
+      };
+    });
+    if (formCats.count < 7 || formCats.overflow || !formCats.inside || formCats.rows < 2) fail(`categorias no formulário deveriam quebrar linha: ${JSON.stringify(formCats)}`);
+    log(`formulário mostra as ${formCats.count} categorias em ${formCats.rows} linhas, sem rolagem`);
     await shot(page, '04-formulario');
     await page.type('#form-service', 'Conta E2E');
     await page.type('#form-username', 'e2e@exemplo.com');
@@ -239,7 +292,11 @@ async function main() {
     log('exclusão pede confirmação e remove a conta (volta a 6)');
 
     // categorias: criar, usar, excluir
-    await page.click('#nav-settings');
+    await page.click('#nav-categories');
+    await page.waitForSelector('#category-group');
+    if ((await page.$$('#category-group .cat-row')).length < 7) fail('tela Categorias deveria listar as categorias do seed');
+    log('tela Categorias pela barra lateral lista as categorias');
+    await shot(page, '16-tela-categorias');
     await page.waitForSelector('#settings-new-category');
     await page.click('#settings-new-category');
     await page.waitForSelector('#cat-name');
@@ -252,7 +309,6 @@ async function main() {
     await page.waitForSelector('#cat-name', { hidden: true });
     await page.waitForFunction(() => [...document.querySelectorAll('#category-group .cat-row')].some((r) => r.textContent.includes('Estudos')));
     log('categoria "Estudos" criada pelo editor (Azul, escola)');
-    await page.evaluate(() => document.querySelector('#category-group').scrollIntoView({ block: 'center' }));
     await shot(page, '14-ajustes-categorias');
 
     await page.click('#nav-vault');
@@ -274,7 +330,7 @@ async function main() {
     await clickCategory(page, 'Estudos');
     await waitRows(page, 6, 'categoria desmarcada');
 
-    await page.click('#nav-settings');
+    await page.click('#nav-categories');
     await page.waitForSelector('#category-group');
     await page.evaluate(() => {
       for (const row of document.querySelectorAll('#category-group .cat-row')) if (row.textContent.includes('Estudos')) row.click();
@@ -292,6 +348,80 @@ async function main() {
     await page.waitForFunction(() => document.querySelector('#detail-name')?.textContent === 'Google');
     if (await page.$('#detail-category')) fail('a conta Google deveria ter ficado sem categoria');
     log('categoria excluída: a conta ficou sem categoria');
+
+    // ajustes de tempo
+    await page.click('#nav-settings');
+    await page.waitForSelector('#set-lock-row');
+    await page.click('#set-lock-row');
+    await page.waitForSelector('#set-lock-opt-1');
+    const recommended = await page.$eval('.pick-row .badge-rec', (el) => el.closest('.pick-row').textContent);
+    if (!recommended.includes('5 minutos')) fail(`opção recomendada inesperada: ${recommended}`);
+    await shot(page, '17-seletor-tempo');
+    await page.click('#set-lock-opt-1');
+    await page.waitForFunction(() => document.querySelector('#protection-hint')?.textContent.includes('1 minuto'));
+    log('bloqueio automático trocado para 1 minuto; texto atualizado');
+    await page.click('#nav-vault');
+    await page.waitForFunction(() => /^Bloqueia em (1:00|0:5\d)$/.test(document.querySelector('#timer-text')?.textContent || ''));
+    log(`contador usa o novo tempo (${await page.$eval('#timer-text', (el) => el.textContent)})`);
+    await page.click('#nav-settings');
+    await page.waitForSelector('#set-lock-row');
+    await page.click('#set-lock-row');
+    await page.click('#set-lock-opt-5');
+    await page.waitForFunction(() => document.querySelector('#protection-hint')?.textContent.includes('5 minutos'));
+    await page.click('#nav-vault');
+    await page.waitForSelector('#entry-list .row');
+
+    // site e histórico de senhas
+    await page.click('#new-entry');
+    await page.waitForSelector('#form-service');
+    await page.type('#form-service', 'Site E2E');
+    await page.type('#form-password', 'SenhaAntiga#2026');
+    await page.type('#form-url', 'ftp://exemplo.com');
+    await page.click('#form-submit');
+    await page.waitForFunction(() => document.querySelector('#form-url-error')?.textContent.length > 0);
+    log('URL inválida mostra erro no campo Site');
+    await page.click('#form-url', { clickCount: 3 });
+    await page.type('#form-url', 'github.com');
+    await page.click('#form-submit');
+    await page.waitForSelector('#form-service', { hidden: true });
+    await page.waitForFunction(() => document.querySelector('#detail-site')?.textContent === 'github.com');
+    log('detalhe mostra o site "github.com"');
+    const [openResponse] = await Promise.all([
+      page.waitForResponse((r) => r.url().includes('/api/open_url')),
+      page.click('#open-site'),
+    ]);
+    const opened = await openResponse.json();
+    if (!opened.ok && opened.error !== 'open_failed') fail(`open_url devolveu ${JSON.stringify(opened)}`);
+    log(`Abrir site respondeu ${opened.ok ? 'ok' : opened.error}`);
+    await page.waitForSelector('#history-empty');
+    log('conta nova: "Esta senha nunca foi alterada."');
+
+    await page.click('#edit-entry');
+    await page.waitForSelector('#form-password');
+    await page.type('#form-password', 'SenhaNova#2027');
+    await page.click('#form-submit');
+    await page.waitForSelector('#form-service', { hidden: true });
+    await page.waitForSelector('#history-group .hist-row');
+    const badge = await page.$eval('#history-badge', (el) => el.textContent);
+    if (badge !== '1 versão anterior') fail(`selo de histórico inesperado: ${badge}`);
+    await page.click('#hist-show-0');
+    await page.waitForFunction(() => document.querySelector('#hist-pw-0')?.textContent === 'SenhaAntiga#2026');
+    log('troca de senha gera 1 versão; Mostrar revela a senha antiga');
+    await page.evaluate(() => document.querySelector('#history-group').scrollIntoView({ block: 'center' }));
+    await shot(page, '18-detalhe-historico');
+
+    await clickRow(page, 'Discord');
+    await page.waitForFunction(() => document.querySelector('#detail-name')?.textContent === 'Discord');
+    await page.waitForFunction(() => document.querySelectorAll('#history-group .hist-row').length === 2);
+    if ((await page.evaluate(() => document.body.textContent)).includes('SenhaAntiga#2026')) fail('senha antiga ficou na tela ao trocar de conta');
+    log('Discord do seed tem 2 versões; senha antiga some ao trocar de conta');
+
+    await clickRow(page, 'Site E2E');
+    await page.waitForFunction(() => document.querySelector('#detail-name')?.textContent === 'Site E2E');
+    await page.click('#delete-entry');
+    await page.waitForSelector('#confirm-delete');
+    await page.click('#confirm-delete');
+    await waitRows(page, 6, 'depois de excluir a conta de site');
 
     // (g) gerador, ajustes, celular
     await page.click('#nav-generator');

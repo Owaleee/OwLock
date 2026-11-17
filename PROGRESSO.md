@@ -100,6 +100,7 @@ MIN_MASTER_PASSWORD_LENGTH = 8                                  (em vault.py; cr
 
 - [x] Interface nova em HTML/CSS/JS (pywebview), visual estilo iOS e logo própria
 - [x] Categorias (Fase 3)
+- [x] Tempos configuráveis, histórico de senhas, site da conta, tela de categorias (Fase 4)
 
 ## Próximos passos
 - App de celular lendo o mesmo formato de cofre.
@@ -224,3 +225,51 @@ Mostrar o símbolo de cada serviço (Discord, Epic Games, GitHub, Steam, Google.
   no futuro, pelo domínio da URL da conta.
 - Desenhado em branco ou na cor oficial da marca sobre o ladrilho grafite; sem correspondência, continua o monograma com a cor da categoria.
 - Opção de escolher o ícone manualmente no formulário da conta.
+
+## Fase 4 — Ajustes de tempo, histórico de senhas, site da conta e correções
+
+Pedidos do Alexandre após testar no Windows:
+1. A faixa de categorias do formulário não rola além de "Jogos" no Windows (mouse sem rolagem horizontal).
+2. Ícone "Categorias" na barra lateral, abrindo uma tela própria para criar/editar categorias (cores, ícones).
+3. Escolher o tempo do bloqueio automático e da limpeza da área de transferência, com a opção recomendada marcada.
+4. Versionamento: histórico das senhas de cada conta (quando foi criada e cada troca).
+5. Botão para abrir o site da conta. (Preencher login/senha no site fica para a próxima versão: exige extensão de navegador.)
+
+### Núcleo
+- `Entry` ganha `url: str = ""` e `password_history: list[dict]` (padrão vazio), cada item `{"password": str, "changed_at": ISO}`
+  = a senha ANTIGA e quando deixou de valer. Mais recente primeiro. Máximo 20 itens (descarta os mais antigos).
+  `Entry.to_dict/from_dict` incluem os dois campos; cofres antigos abrem com padrões.
+- O histórico é preenchido no `Vault.update` quando a senha muda (compara com a senha salva; senha igual não gera versão).
+- `Settings` (dataclass) no conteúdo cifrado: `auto_lock_minutes: int = 5`, `clipboard_clear_seconds: int = 30`.
+  `AUTO_LOCK_OPTIONS = (1, 2, 5, 10, 15, 30)` (recomendado 5) e `CLIPBOARD_OPTIONS = (10, 20, 30, 45, 60, 90)` (recomendado 30).
+  Texto claro: `{"entries": [...], "categories": [...], "settings": {...}}`; sem a chave → padrões; valor fora das opções → padrão.
+  `Vault.settings` e `Vault.update_settings(settings)` (salva, com rollback em memória se falhar).
+
+### Api (acréscimos e mudanças)
+```
+get_settings() -> {ok, settings: {auto_lock_minutes, clipboard_clear_seconds},
+                   options: {auto_lock_minutes: [{value, label, recommended}], clipboard_clear_seconds: [...]}}
+    labels: "1 minuto", "5 minutos", "30 segundos", "1 minuto e 30 segundos"...
+save_settings(data) -> {ok, settings} | invalid_auto_lock | invalid_clipboard | save_failed
+    Ao abrir o cofre e ao salvar, a Api passa a usar esses valores (auto-lock em segundos = minutos*60; clear_after).
+    status() devolve auto_lock_seconds e clipboard_clear_seconds atuais.
+EntrySummary ganha: url, history_count (nunca as senhas antigas)
+save_entry(data): data ganha url ("" ou http(s)://...; sem esquema, prefixa https://; outro esquema → invalid_url; máx. 2048)
+get_password_history(id) -> {ok, created_at, history: [{index, changed_at, length, strength: {score,label}}]} | not_found
+reveal_history_password(id, index) -> {ok, password} | not_found | invalid_index
+copy_history_password(id, index) -> {ok, clear_in} | not_found | invalid_index      (mesma limpeza condicional)
+open_url(id) -> {ok} | not_found | no_url | invalid_url | open_failed
+    Abre a URL salva da conta no navegador padrão (webbrowser.open), só http/https. Recebe o id, nunca uma URL vinda da interface.
+    Abridor injetável nos testes.
+```
+
+### Interface
+- Barra lateral: novo item "Categorias" (entre Cofre e Gerador) → tela Categorias (lista agrupada com ícone, nome, contador,
+  editar; "Nova categoria"). Ajustes mantém um atalho para ela, mas a gestão principal fica na tela própria.
+- Faixa de categorias (lista e formulário): setas ‹ › que aparecem quando há mais conteúdo, roda vertical do mouse rola na
+  horizontal, e arrastar com o mouse rola. No FORMULÁRIO, as pílulas quebram linha (flex-wrap) — nada escondido.
+- Ajustes > Proteção automática: duas linhas com seletor (pílulas ou menu iOS) das opções; a recomendada mostra o selo "Recomendado".
+  O texto explicativo usa os valores escolhidos. O contador "Bloqueia em" e o anel da cópia usam os tempos escolhidos.
+- Formulário: campo "Site" (URL). Detalhe: linha "Site" com o domínio e botão "Abrir site" (chama open_url).
+- Detalhe: seção "Histórico de senhas" (lista agrupada): "Criada em <data>", e cada versão "Senha anterior · alterada em <data>"
+  com LED de força, botões Mostrar (revela só aquela, some ao trocar de conta/bloquear) e Copiar. Se vazio: "Esta senha nunca foi alterada."
