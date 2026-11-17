@@ -21,6 +21,7 @@ const ICONS = {
   tag: [['path', { d: 'M3 3h8.2a2 2 0 0 1 1.4.6l8 8a2 2 0 0 1 0 2.8l-6.2 6.2a2 2 0 0 1-2.8 0l-8-8A2 2 0 0 1 3 11.2V3z' }], ['circle', { cx: 7.5, cy: 7.5, r: 1.3 }]],
   external: [['path', { d: 'M14 4h6v6M20 4l-9 9M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4' }]],
   check: [['path', { d: 'M5 12.5l4.5 4.5L19 7.5' }]],
+  link: [['path', { d: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1' }]],
   none: [['circle', { cx: 12, cy: 12, r: 8 }], ['path', { d: 'M6.3 17.7L17.7 6.3' }]],
   user: [['circle', { cx: 12, cy: 8, r: 4 }], ['path', { d: 'M4 21a8 8 0 0 1 16 0' }]],
   briefcase: [['rect', { x: 3, y: 7, width: 18, height: 13, rx: 3 }], ['path', { d: 'M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M3 13h18' }]],
@@ -132,6 +133,8 @@ const state = {
   history: null, // { id, created_at, history }
   histReveal: null, // { id, index, text }
   options: { colors: [], icons: [] },
+  brandIcons: [], // [{ slug, title, icon_url, color }]
+  services: [], // biblioteca de serviços (ServiceSummary)
   gen: null,
 };
 
@@ -149,7 +152,7 @@ function wipeState() {
   Object.assign(state, {
     unlocked: false, view: 'vault', screen: 'list', filter: 'all', query: '', entries: [],
     stats: { ...EMPTY_STATS }, selected: null, revealed: null, copied: null, gen: null, deadline: 0,
-    categories: [], categoryFilter: '', settings: null, history: null, histReveal: null,
+    categories: [], categoryFilter: '', settings: null, history: null, histReveal: null, services: [],
   });
   ui = {};
   root.replaceChildren();
@@ -238,8 +241,15 @@ function createMeter(id) {
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 let activeModal = null;
 
-function openModal(card, { dismissOnBackdrop = false } = {}) {
-  closeModal();
+function openModal(card, { dismissOnBackdrop = false, nested = false, onClose = null } = {}) {
+  // nested: o modal atual fica escondido (com o que foi digitado) e volta ao fechar o novo
+  const parent = nested ? activeModal : null;
+  if (parent) {
+    parent.backdrop.hidden = true;
+    activeModal = null;
+  } else {
+    closeModal();
+  }
   const opener = document.activeElement;
   card.setAttribute('role', 'dialog');
   card.setAttribute('aria-modal', 'true');
@@ -252,18 +262,24 @@ function openModal(card, { dismissOnBackdrop = false } = {}) {
   }
   modalRoot.append(backdrop);
   root.setAttribute('inert', '');
-  activeModal = { backdrop, card, opener };
+  activeModal = { backdrop, card, opener, parent, onClose };
   const first = card.querySelector('[data-autofocus]') || card.querySelector(FOCUSABLE);
   first?.focus();
 }
 
 function closeModal() {
   if (!activeModal) return;
-  const { backdrop, opener } = activeModal;
+  const { backdrop, opener, parent, onClose } = activeModal;
   activeModal = null;
   backdrop.remove();
-  root.removeAttribute('inert');
+  if (parent) {
+    activeModal = parent;
+    parent.backdrop.hidden = false;
+  } else {
+    root.removeAttribute('inert');
+  }
   if (opener && opener.isConnected) opener.focus();
+  if (onClose) onClose();
 }
 
 document.addEventListener('keydown', (event) => {
@@ -480,7 +496,7 @@ async function enterMain(status) {
   state.status = status;
   buildShell();
   startTimer(typeof status.seconds_left === 'number' ? status.seconds_left : status.auto_lock_seconds || 300);
-  await Promise.all([loadOptions(), loadCategories(), loadSettings()]);
+  await Promise.all([loadOptions(), loadCategories(), loadSettings(), loadServices(), loadBrandIcons()]);
   await loadEntries();
   if (state.entries.length && !state.selected) {
     state.selected = state.entries[0];
@@ -569,7 +585,8 @@ function buildMain() {
   ui.paneCats = h('div', { class: 'pane pane-categories' });
   ui.paneGen = h('div', { class: 'pane pane-generator' });
   ui.paneSettings = h('div', { class: 'pane pane-settings' });
-  return h('main', { class: 'main' }, ui.paneVault, ui.paneCats, ui.paneGen, ui.paneSettings);
+  ui.paneLib = h('div', { class: 'pane pane-library' });
+  return h('main', { class: 'main' }, ui.paneVault, ui.paneCats, ui.paneGen, ui.paneSettings, ui.paneLib);
 }
 
 function setView(view) {
@@ -580,17 +597,21 @@ function setView(view) {
   state.view = view;
   ui.shell.dataset.view = view;
   for (const button of ui.shell.querySelectorAll('.rail-btn[data-view]')) {
-    if (button.dataset.view === view) button.setAttribute('aria-current', 'page');
+    const here = button.dataset.view === (view === 'library' ? 'settings' : view);
+    if (here) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   }
   ui.paneCats.replaceChildren();
   ui.paneGen.replaceChildren();
   ui.paneSettings.replaceChildren();
+  ui.paneLib.replaceChildren();
   ui.catView = null;
+  ui.libList = null;
   state.gen = null;
   if (view === 'categories') buildCategoriesView();
   if (view === 'generator') buildGenerator();
   if (view === 'settings') buildSettings();
+  if (view === 'library') buildLibraryView();
 }
 
 function setScreen(screen) {
@@ -704,17 +725,73 @@ function renderList() {
   ui.rows.replaceChildren(...rows);
 }
 
-function monoBadge(entry) {
-  const el = h('span', { class: 'mono-badge', 'aria-hidden': 'true', text: monogram(entry) });
-  if (entry.category) {
-    el.classList.add('cat');
-    el.style.setProperty('--cat', entry.category.color_hex);
+/* ---------- ícone da conta (ladrilho de app com a marca, ou monograma) ---------- */
+
+const HEX_COLOR = /^#[0-9A-F]{6}$/i;
+const ICON_URL = /^icons\/brands\/[a-z0-9-]+\.svg$/;
+const GRAPHITE = '#2A2B31';
+
+function relativeLuminance(hex) {
+  const channel = (offset) => {
+    const v = parseInt(hex.slice(offset, offset + 2), 16) / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
+}
+
+/* Ladrilho da marca: fundo na cor oficial (grafite se for escura demais) e desenho branco.
+   Sem desenho válido, volta ao monograma com o degradê da categoria. */
+function iconTile({ url, color, letter, category = null, size = 40 }) {
+  const valid = typeof url === 'string' && ICON_URL.test(url);
+  if (!valid) {
+    const mono = h('span', { class: 'mono-badge', 'aria-hidden': 'true', text: letter });
+    if (category) {
+      mono.classList.add('cat');
+      mono.style.setProperty('--cat', category.color_hex);
+    }
+    mono.style.setProperty('--s', `${size}px`);
+    return mono;
   }
-  return el;
+  const brand = typeof color === 'string' && HEX_COLOR.test(color) ? color : GRAPHITE;
+  const dark = relativeLuminance(brand) < 0.08;
+  const tile = h('span', { class: 'acc-icon' + (dark ? ' dark' : ''), 'aria-hidden': 'true' });
+  tile.style.setProperty('--tile', dark ? GRAPHITE : brand);
+  tile.style.setProperty('--s', `${size}px`);
+  const img = h('img', { src: url, alt: '', draggable: 'false', decoding: 'async' });
+  img.addEventListener('error', () => {
+    tile.classList.add('broken');
+    tile.replaceChildren(h('span', { class: 'acc-letter', text: letter }));
+  });
+  tile.append(img);
+  return tile;
+}
+
+function monoBadge(entry, size = 40) {
+  return iconTile({ url: entry.icon_url, color: entry.icon_color, letter: monogram(entry), category: entry.category, size });
 }
 
 function monogram(entry) {
   return (entry.service.trim()[0] || '?').toUpperCase();
+}
+
+function serviceTile(service, size = 36) {
+  return iconTile({ url: service.icon_url, color: service.color, letter: (service.name.trim()[0] || '?').toUpperCase(), size });
+}
+
+/* ---------- biblioteca de serviços (dados) ---------- */
+
+async function loadServices() {
+  const r = await call('list_services', '');
+  if (r.ok && state.unlocked) state.services = r.services || [];
+}
+
+async function loadBrandIcons() {
+  const r = await call('brand_icons');
+  if (r.ok) state.brandIcons = r.icons || [];
+}
+
+function libraryDomain(url) {
+  return siteHost(url || '').replace(/^www\./, '');
 }
 
 function selectEntry(id, openDetail = false) {
@@ -777,6 +854,16 @@ function renderDetail({ first = false } = {}) {
       h('span', { class: 'row-k', text: 'Site' }),
       h('span', { class: 'row-v', id: 'detail-site', text: siteHost(entry.url) }),
       h('button', { class: 'btn btn-chip with-icon', id: 'open-site', type: 'button', onClick: () => openSite(entry) }, icon('external', 14, 2.2), 'Abrir site')));
+  } else if (entry.service_key) {
+    const service = state.services.find((item) => item.key === entry.service_key);
+    if (service && service.login_url) {
+      infoRows.splice(1, 0, h('div', { class: 'group-row', id: 'detail-site-row' },
+        h('span', { class: 'row-k', text: 'Site' }),
+        h('span', { class: 'row-v site-lib' },
+          h('span', { id: 'detail-site', text: libraryDomain(service.login_url) }),
+          h('span', { class: 'badge-pill', id: 'detail-site-source', text: 'da biblioteca' })),
+        h('button', { class: 'btn btn-chip with-icon', id: 'open-login', type: 'button', onClick: () => openSite(entry, true) }, icon('external', 14, 2.2), 'Abrir login')));
+    }
   }
   if (entry.notes) {
     infoRows.push(h('div', { class: 'group-row stacked' },
@@ -787,7 +874,7 @@ function renderDetail({ first = false } = {}) {
   const card = h('article', { class: first ? 'detail ow-in' : 'detail ow-swap', 'aria-label': `Detalhes de ${entry.service}` },
     h('button', { class: 'btn back-btn', id: 'back', type: 'button', onClick: () => setScreen('list') }, icon('back', 22, 2.2), 'Cofre'),
     h('header', { class: 'detail-head' },
-      monoBadge(entry),
+      monoBadge(entry, 64),
       h('div', { class: 'detail-title' },
         h('h1', { id: 'detail-name', text: entry.service }),
         entry.category ? detailCategory(entry.category) : null,
@@ -824,10 +911,10 @@ function siteHost(url) {
   }
 }
 
-async function openSite(entry) {
+async function openSite(entry, fromLibrary = false) {
   const r = await call('open_url', entry.id);
-  if (r.ok) toast('Abrindo o site...');
-  else if (r.error !== 'locked') toast(apiMessage(r, 'Não foi possível abrir o site.'), 'warn');
+  if (r.ok) toast(fromLibrary ? 'Abrindo o login...' : 'Abrindo o site...');
+  else if (r.error !== 'locked') toast(apiMessage(r, fromLibrary ? 'Não foi possível abrir o login.' : 'Não foi possível abrir o site.'), 'warn');
 }
 
 const DATE_FORMAT = new Intl.DateTimeFormat('pt-BR', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -1002,9 +1089,71 @@ async function copyField(entry, field) {
    Formulário de conta (nova / edição)
    ====================================================================== */
 
+/* Controle segmentado genérico (Automático / Letra / Escolher etc.). */
+function segmentedControl({ id, label, options, value, onChange }) {
+  const box = h('div', { class: 'segmented', id, role: 'radiogroup', 'aria-label': label, 'data-cols': String(options.length), 'data-index': '0' },
+    h('span', { class: 'seg-thumb', 'aria-hidden': 'true' }));
+  const buttons = options.map((option) => h('button', {
+    class: 'btn tab', type: 'button', role: 'radio', id: `${id}-${option.value}`, 'data-value': option.value,
+    onClick: () => {
+      set(option.value);
+      onChange(option.value);
+    },
+  }, option.label));
+  box.append(...buttons);
+  function set(next) {
+    box.dataset.index = String(Math.max(0, options.findIndex((option) => option.value === next)));
+    for (const button of buttons) button.setAttribute('aria-checked', button.dataset.value === next ? 'true' : 'false');
+  }
+  set(value);
+  return { el: box, set };
+}
+
+/* Grade pesquisável de ícones de marca, em um modal por cima do atual. */
+function openIconPicker({ current = '', onPick, onCancel }) {
+  let chosen = false;
+  const search = h('input', {
+    class: 'row-input', id: 'icon-search', type: 'text', placeholder: 'Buscar ícone', autocomplete: 'off', spellcheck: 'false',
+    'aria-label': 'Buscar ícone', 'data-autofocus': '',
+  });
+  const grid = h('div', { class: 'brand-grid', id: 'brand-grid', role: 'radiogroup', 'aria-label': 'Ícones' });
+  const empty = h('p', { class: 'hint', id: 'icon-empty', text: 'Nenhum ícone encontrado.' });
+  empty.hidden = true;
+  const paint = () => {
+    const needle = search.value.trim().toLowerCase();
+    const list = state.brandIcons.filter((item) => !needle || item.title.toLowerCase().includes(needle) || item.slug.includes(needle));
+    grid.replaceChildren(...list.map((item) => {
+      const selected = item.slug === current;
+      return h('button', {
+        class: 'btn brand-cell', type: 'button', role: 'radio', 'aria-checked': selected ? 'true' : 'false',
+        id: `brand-${item.slug}`, 'data-slug': item.slug, 'aria-label': item.title,
+        onClick: () => {
+          chosen = true;
+          closeModal();
+          onPick(item.slug);
+        },
+      }, iconTile({ url: item.icon_url, color: item.color, letter: (item.title[0] || '?').toUpperCase(), size: 44 }),
+      h('span', { class: 'brand-name', text: item.title }));
+    }));
+    empty.hidden = list.length > 0;
+  };
+  search.addEventListener('input', paint);
+  paint();
+  const card = h('div', { class: 'modal', 'aria-labelledby': 'icon-title' },
+    h('div', { class: 'modal-head' },
+      h('h2', { id: 'icon-title', text: 'Escolher ícone' }),
+      h('button', { class: 'btn btn-icon', type: 'button', 'aria-label': 'Fechar', onClick: closeModal }, icon('close', 18))),
+    h('label', { class: 'search' }, icon('search', 16), search),
+    h('div', { class: 'brand-scroll' }, grid, empty));
+  openModal(card, { nested: true, dismissOnBackdrop: true, onClose: () => { if (!chosen && onCancel) onCancel(); } });
+}
+
 function openEntryForm(entry) {
   const editing = Boolean(entry);
-  const serviceInput = h('input', { class: 'row-input', id: 'form-service', type: 'text', autocomplete: 'off', value: editing ? entry.service : '', 'data-autofocus': '', placeholder: 'Obrigatório' });
+  const serviceInput = h('input', {
+    class: 'row-input', id: 'form-service', type: 'text', autocomplete: 'off', value: editing ? entry.service : '', 'data-autofocus': '', placeholder: 'Obrigatório',
+    role: 'combobox', 'aria-autocomplete': 'list', 'aria-expanded': 'false', 'aria-controls': 'service-suggestions', spellcheck: 'false',
+  });
   const userInput = h('input', { class: 'row-input', id: 'form-username', type: 'text', autocomplete: 'off', spellcheck: 'false', value: editing ? entry.username : '' });
   const pwInput = h('input', {
     class: 'row-input', id: 'form-password', type: 'password', autocomplete: 'new-password', spellcheck: 'false',
@@ -1040,6 +1189,194 @@ function openEntryForm(entry) {
 
   const urlInput = h('input', { class: 'row-input', id: 'form-url', type: 'text', autocomplete: 'off', spellcheck: 'false', inputmode: 'url', placeholder: 'exemplo.com', value: editing ? entry.url || '' : '' });
   const urlError = h('p', { class: 'msg error', id: 'form-url-error', role: 'alert' });
+  const urlNote = h('p', { class: 'msg note', id: 'form-url-note' }, icon('check', 13, 2.6), 'Link preenchido pela biblioteca');
+  urlNote.hidden = true;
+
+  /* --- biblioteca: sugestões, preenchimento do link e ícone --- */
+  let autoLink = null; // último link preenchido pela biblioteca (some se o usuário editar o Site)
+  let touched = false; // o usuário digitou no Serviço
+  let lastMatch = null;
+  let lookedFor = null;
+  let pending = Promise.resolve();
+  let suggestions = [];
+  let activeIndex = -1;
+
+  const suggestBox = h('div', { class: 'suggest', id: 'service-suggestions', role: 'listbox', 'aria-label': 'Serviços da biblioteca' });
+  suggestBox.hidden = true;
+
+  let iconMode = editing ? (entry.icon === 'none' ? 'letter' : entry.icon ? 'pick' : 'auto') : 'auto';
+  let iconSlug = editing && entry.icon && entry.icon !== 'none' ? entry.icon : '';
+  const iconPreview = h('span', { class: 'icon-preview', id: 'form-icon-preview' });
+  const paintIconPreview = () => {
+    const letter = (serviceInput.value.trim()[0] || '?').toUpperCase();
+    let tile;
+    if (iconMode === 'pick') {
+      const brand = state.brandIcons.find((item) => item.slug === iconSlug);
+      tile = brand ? iconTile({ url: brand.icon_url, color: brand.color, letter, size: 32 })
+        : iconTile({ url: editing ? entry.icon_url : null, color: editing ? entry.icon_color : null, letter, size: 32 });
+    } else if (iconMode === 'auto') {
+      const source = touched ? lastMatch : (editing ? { icon_url: entry.icon_url, color: entry.icon_color } : null);
+      tile = iconTile({ url: source?.icon_url, color: source?.color || source?.icon_color, letter, size: 32 });
+    } else {
+      tile = iconTile({ letter, size: 32 });
+    }
+    iconPreview.replaceChildren(tile);
+  };
+  const iconSeg = segmentedControl({
+    id: 'form-icon', label: 'Ícone',
+    options: [{ value: 'auto', label: 'Automático' }, { value: 'letter', label: 'Letra' }, { value: 'pick', label: 'Escolher' }],
+    value: iconMode,
+    onChange: (mode) => {
+      if (mode !== 'pick') {
+        iconMode = mode;
+        paintIconPreview();
+        return;
+      }
+      openIconPicker({
+        current: iconSlug,
+        onPick: (slug) => {
+          iconSlug = slug;
+          iconMode = 'pick';
+          iconSeg.set('pick');
+          paintIconPreview();
+        },
+        onCancel: () => iconSeg.set(iconMode),
+      });
+    },
+  });
+
+  const closeSuggestions = () => {
+    suggestBox.hidden = true;
+    suggestions = [];
+    activeIndex = -1;
+    serviceInput.setAttribute('aria-expanded', 'false');
+    serviceInput.removeAttribute('aria-activedescendant');
+  };
+  const markActive = () => {
+    [...suggestBox.children].forEach((node, index) => {
+      node.setAttribute('aria-selected', index === activeIndex ? 'true' : 'false');
+      node.classList.toggle('is-active', index === activeIndex);
+    });
+    if (activeIndex >= 0) {
+      serviceInput.setAttribute('aria-activedescendant', `suggest-opt-${activeIndex}`);
+      suggestBox.children[activeIndex]?.scrollIntoView({ block: 'nearest' });
+    } else {
+      serviceInput.removeAttribute('aria-activedescendant');
+    }
+  };
+  const applyLink = (service) => {
+    if (!service || !service.login_url) return;
+    const current = urlInput.value.trim();
+    if (current === '' || (autoLink && current === autoLink)) {
+      urlInput.value = service.login_url;
+      autoLink = service.login_url;
+      urlNote.hidden = false;
+    }
+  };
+  const chooseSuggestion = (service) => {
+    serviceInput.value = service.name;
+    touched = true;
+    lastMatch = service;
+    lookedFor = service.name.trim();
+    applyLink(service);
+    closeSuggestions();
+    paintIconPreview();
+    serviceInput.focus();
+  };
+  const paintSuggestions = () => {
+    if (!suggestions.length || document.activeElement !== serviceInput) {
+      closeSuggestions();
+      return;
+    }
+    suggestBox.replaceChildren(...suggestions.map((service, index) => h('div', {
+      class: 'suggest-item', role: 'option', id: `suggest-opt-${index}`, 'aria-selected': 'false', 'data-key': service.key,
+      onMousedown: (event) => event.preventDefault(),
+      onClick: () => chooseSuggestion(service),
+      onMousemove: () => {
+        if (activeIndex !== index) {
+          activeIndex = index;
+          markActive();
+        }
+      },
+    }, serviceTile(service, 32),
+    h('span', { class: 'suggest-text' },
+      h('span', { class: 'suggest-name', text: service.name }),
+      h('span', { class: 'suggest-domain', text: libraryDomain(service.login_url) })))));
+    suggestBox.hidden = false;
+    serviceInput.setAttribute('aria-expanded', 'true');
+    activeIndex = -1;
+    markActive();
+  };
+  const runLookup = async (value) => {
+    const r = await call('lookup_service', value);
+    if (!r.ok) return null;
+    // respostas atrasadas não sobrescrevem o estado do texto atual
+    if (serviceInput.value.trim() === value) {
+      lastMatch = r.match || null;
+      lookedFor = value;
+      suggestions = r.suggestions || [];
+      if (iconMode === 'auto') paintIconPreview();
+    }
+    return r;
+  };
+  const lookupSoon = debounce(async () => {
+    const value = serviceInput.value.trim();
+    if (!value) {
+      lastMatch = null;
+      lookedFor = '';
+      closeSuggestions();
+      paintIconPreview();
+      return;
+    }
+    const r = await runLookup(value);
+    if (r && serviceInput.value.trim() === value) paintSuggestions();
+  }, 120);
+
+  serviceInput.addEventListener('input', () => {
+    touched = true;
+    paintIconPreview();
+    lookupSoon();
+  });
+  serviceInput.addEventListener('keydown', (event) => {
+    const open = !suggestBox.hidden && suggestions.length > 0;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (!open) return;
+      event.preventDefault();
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      activeIndex = (activeIndex + step + suggestions.length) % suggestions.length;
+      markActive();
+    } else if (event.key === 'Enter' && open && activeIndex >= 0) {
+      event.preventDefault();
+      chooseSuggestion(suggestions[activeIndex]);
+    } else if (event.key === 'Escape' && open) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeSuggestions();
+    }
+  });
+  serviceInput.addEventListener('blur', () => {
+    closeSuggestions();
+    if (!touched) return;
+    const value = serviceInput.value.trim();
+    if (!value) return;
+    pending = (async () => {
+      let match = lookedFor === value ? lastMatch : null;
+      if (lookedFor !== value) {
+        const r = await runLookup(value);
+        match = r ? r.match : null;
+      }
+      if (match && serviceInput.value.trim() === value) {
+        serviceInput.value = match.name;
+        applyLink(match);
+        paintIconPreview();
+      }
+    })();
+  });
+  urlInput.addEventListener('input', () => {
+    autoLink = null;
+    urlNote.hidden = true;
+  });
+  paintIconPreview();
 
   const notes = h('textarea', { class: 'row-input', id: 'form-notes', rows: '3', value: editing ? entry.notes || '' : '' });
   const error = h('p', { class: 'msg error', id: 'form-error', role: 'alert' });
@@ -1085,10 +1422,13 @@ function openEntryForm(entry) {
   });
 
   const form = h('form', { novalidate: '' },
-    h('div', { class: 'group' },
-      h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'form-service', text: 'Serviço *' }), serviceInput),
-      h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'form-username', text: 'Login / e-mail' }), userInput),
-      h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'form-url', text: 'Site' }), urlInput)),
+    h('div', { class: 'suggest-wrap' },
+      h('div', { class: 'group' },
+        h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'form-service', text: 'Serviço *' }), serviceInput),
+        h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'form-username', text: 'Login / e-mail' }), userInput),
+        h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'form-url', text: 'Site' }), urlInput)),
+      suggestBox),
+    urlNote,
     urlError,
     h('div', { class: 'group' },
       h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'form-password', text: 'Senha' }), pwInput, showButton, genButton)),
@@ -1097,6 +1437,9 @@ function openEntryForm(entry) {
       h('label', { class: 'group-row switch-row', for: 'form-2fa' }, h('span', { class: 'row-k grow', text: 'Verificação em duas etapas (2FA)' }), twofaBox),
       h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'form-2fa-app', text: 'App autenticador' }), twofaApp)),
     h('div', { class: 'group' },
+      h('div', { class: 'group-row stacked' },
+        h('div', { class: 'icon-head' }, h('span', { class: 'row-k', id: 'form-icon-label', text: 'Ícone' }), iconPreview),
+        iconSeg.el),
       h('div', { class: 'group-row stacked' }, h('span', { class: 'row-k', id: 'form-cat-label', text: 'Categoria' }), categoryPicker),
       h('div', { class: 'group-row stacked' }, h('label', { class: 'row-k', for: 'form-notes', text: 'Notas' }), notes)),
     error,
@@ -1105,6 +1448,7 @@ function openEntryForm(entry) {
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (submit.disabled) return;
+    await pending;
     error.textContent = '';
     serviceInput.parentElement.classList.remove('invalid');
     urlInput.parentElement.classList.remove('invalid');
@@ -1123,6 +1467,7 @@ function openEntryForm(entry) {
       password: editing && typed === '' ? null : typed,
       category_id: categoryId,
       url: urlInput.value.trim(),
+      icon: iconMode === 'letter' ? 'none' : iconMode === 'pick' ? iconSlug : '',
       has_2fa: twofaBox.checked,
       twofa_app: twofaBox.checked ? twofaApp.value.trim() : '',
       notes: notes.value,
@@ -1680,6 +2025,11 @@ function buildSettings() {
           h('span', { class: 'cat-tile mint', 'aria-hidden': 'true' }, icon('tag', 18)),
           h('span', { class: 'row-k grow', text: 'Categorias' }),
           h('span', { class: 'cat-row-count', text: String(catCount) }),
+          h('span', { class: 'chev', 'aria-hidden': 'true' }, icon('chevron', 16, 2.4))),
+        h('button', { class: 'btn group-row cat-row', id: 'settings-library', type: 'button', onClick: () => setView('library') },
+          h('span', { class: 'cat-tile blue', 'aria-hidden': 'true' }, icon('link', 18)),
+          h('span', { class: 'row-k grow', text: 'Biblioteca de links' }),
+          h('span', { class: 'cat-row-count', text: String(state.services.length) }),
           h('span', { class: 'chev', 'aria-hidden': 'true' }, icon('chevron', 16, 2.4))))),
     ui.protection,
     h('div', { class: 'settings-stack ow-in' },
@@ -1778,6 +2128,275 @@ async function chooseSetting(item, value, errorEl) {
     tick();
   }
   toast('Ajuste salvo');
+}
+
+/* ======================================================================
+   Biblioteca de links (Ajustes > Biblioteca de links)
+   ====================================================================== */
+
+function buildLibraryView() {
+  ui.libServices = state.services;
+  ui.libSeq = 0;
+  const search = h('input', {
+    id: 'library-search', type: 'text', placeholder: 'Buscar serviço', 'aria-label': 'Buscar serviço', autocomplete: 'off', spellcheck: 'false',
+  });
+  const clear = h('button', { class: 'btn search-clear', id: 'library-search-clear', type: 'button', hidden: true, 'aria-label': 'Limpar busca' }, icon('close', 11, 3));
+  const run = debounce(async () => {
+    const seq = ++ui.libSeq;
+    const r = await call('list_services', search.value.trim());
+    if (seq !== ui.libSeq || !ui.libList) return;
+    if (r.ok) {
+      ui.libServices = r.services || [];
+      renderLibrary();
+    }
+  }, 150);
+  search.addEventListener('input', () => {
+    clear.hidden = search.value === '';
+    run();
+  });
+  clear.addEventListener('click', () => {
+    search.value = '';
+    clear.hidden = true;
+    run();
+    search.focus();
+  });
+  ui.libSearch = search;
+  ui.libList = h('div', { class: 'settings-stack', id: 'library-list' });
+  ui.paneLib.replaceChildren(
+    h('button', { class: 'btn crumb', id: 'library-back', type: 'button', onClick: () => setView('settings') }, icon('chevronLeft', 18, 2.4), 'Ajustes'),
+    h('div', { class: 'page-title' },
+      h('h1', { text: 'Biblioteca de links' }),
+      h('p', { text: 'Links de login que o app preenche ao digitar o nome do serviço.' })),
+    h('div', { class: 'lib-bar' },
+      h('label', { class: 'search' }, icon('search', 16), search, clear),
+      h('button', { class: 'btn btn-primary', id: 'library-add', type: 'button', onClick: () => openServiceEditor(null) }, icon('plus', 16, 2.4), 'Adicionar serviço')),
+    ui.libList);
+  renderLibrary();
+}
+
+function renderLibrary() {
+  if (!ui.libList) return;
+  const list = ui.libServices || [];
+  if (!list.length) {
+    ui.libList.replaceChildren(h('p', { class: 'hint', id: 'library-empty', text: 'Nenhum serviço encontrado.' }));
+    return;
+  }
+  const rows = list.map((service) => {
+    const badge = !service.builtin
+      ? h('span', { class: 'badge-pill mint', text: 'Personalizado' })
+      : service.customized ? h('span', { class: 'badge-pill amber', text: 'Alterado' }) : null;
+    return h('button', {
+      class: 'btn group-row cat-row lib-row', type: 'button', 'data-key': service.key, 'data-name': service.name,
+      onClick: () => openServiceEditor(service),
+    }, serviceTile(service, 36),
+    h('span', { class: 'lib-text' },
+      h('span', { class: 'lib-name', text: service.name }),
+      h('span', { class: 'lib-domain', text: libraryDomain(service.login_url) })),
+    badge,
+    h('span', { class: 'chev', 'aria-hidden': 'true' }, icon('chevron', 16, 2.4)));
+  });
+  ui.libList.replaceChildren(h('div', { class: 'group', id: 'library-group' }, rows));
+}
+
+/* Atualiza a biblioteca em memória, a tela e as contas (ícones e links dependem dela). */
+async function afterServiceChange() {
+  await loadServices();
+  if (state.view === 'library' && ui.libList) {
+    const r = await call('list_services', ui.libSearch ? ui.libSearch.value.trim() : '');
+    if (r.ok) ui.libServices = r.services || [];
+    renderLibrary();
+  }
+  await loadEntries();
+  if (state.selected) renderDetail();
+}
+
+function splitAliases(text) {
+  return text.split(',').map((part) => part.trim()).filter(Boolean);
+}
+
+function openServiceEditor(service) {
+  const isNew = !service;
+  const builtin = Boolean(service && service.builtin);
+  const nameInput = h('input', {
+    class: 'row-input', id: 'service-name', type: 'text', autocomplete: 'off', placeholder: 'Obrigatório', maxlength: '40',
+    value: service ? service.name : '', ...(builtin ? {} : { 'data-autofocus': '' }),
+  });
+  const aliasInput = h('input', {
+    class: 'row-input', id: 'service-aliases', type: 'text', autocomplete: 'off', spellcheck: 'false', placeholder: 'Separados por vírgula',
+    value: service ? (service.aliases || []).join(', ') : '',
+  });
+  const urlInput = h('input', {
+    class: 'row-input', id: 'service-url', type: 'text', autocomplete: 'off', spellcheck: 'false', inputmode: 'url', placeholder: 'exemplo.com/login',
+    value: service ? service.login_url || '' : '', ...(builtin ? { 'data-autofocus': '' } : {}),
+  });
+  const nameError = h('p', { class: 'msg error', id: 'service-name-error', role: 'alert' });
+  const urlError = h('p', { class: 'msg error', id: 'service-url-error', role: 'alert' });
+  const error = h('p', { class: 'msg error', id: 'service-error', role: 'alert' });
+
+  let iconSlug = service && !builtin ? service.icon || '' : '';
+  let iconMode = iconSlug ? 'pick' : 'letter';
+  const preview = h('span', { class: 'icon-preview', id: 'service-icon-preview' });
+  const paintPreview = () => {
+    const letter = (nameInput.value.trim()[0] || '?').toUpperCase();
+    const brand = iconMode === 'pick' ? state.brandIcons.find((item) => item.slug === iconSlug) : null;
+    preview.replaceChildren(brand ? iconTile({ url: brand.icon_url, color: brand.color, letter, size: 32 }) : iconTile({ letter, size: 32 }));
+  };
+  const iconSeg = segmentedControl({
+    id: 'service-icon', label: 'Ícone',
+    options: [{ value: 'letter', label: 'Letra' }, { value: 'pick', label: 'Escolher' }],
+    value: iconMode,
+    onChange: (mode) => {
+      if (mode !== 'pick') {
+        iconMode = 'letter';
+        iconSlug = '';
+        paintPreview();
+        return;
+      }
+      openIconPicker({
+        current: iconSlug,
+        onPick: (slug) => {
+          iconSlug = slug;
+          iconMode = 'pick';
+          iconSeg.set('pick');
+          paintPreview();
+        },
+        onCancel: () => iconSeg.set(iconMode),
+      });
+    },
+  });
+  nameInput.addEventListener('input', paintPreview);
+  paintPreview();
+
+  const submit = h('button', { class: 'btn btn-primary', id: 'service-submit', type: 'submit' }, 'Salvar');
+  const actions = [];
+  if (builtin) {
+    actions.push(h('button', {
+      class: 'btn btn-ghost push-left', id: 'service-reset', type: 'button', ...(service.customized ? {} : { disabled: true }),
+      onClick: async (event) => {
+        const button = event.currentTarget;
+        button.disabled = true;
+        const r = await call('reset_service', service.key);
+        if (!r.ok) {
+          if (r.error !== 'locked') {
+            button.disabled = false;
+            error.textContent = apiMessage(r, 'Não foi possível restaurar o link.');
+          }
+          return;
+        }
+        closeModal();
+        await afterServiceChange();
+        toast('Link restaurado');
+      },
+    }, 'Restaurar link padrão'));
+  } else if (!isNew) {
+    actions.push(h('button', { class: 'btn btn-ghost danger push-left', id: 'service-delete', type: 'button', onClick: () => confirmDeleteService(service) }, 'Excluir serviço'));
+  }
+  actions.push(h('button', { class: 'btn btn-ghost', id: 'service-cancel', type: 'button', onClick: closeModal }, 'Cancelar'), submit);
+
+  const nameRow = h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'service-name', text: 'Nome *' }), nameInput);
+  const urlRow = h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'service-url', text: 'Link' }), urlInput);
+  const fields = builtin
+    ? [h('div', { class: 'group' }, urlRow)]
+    : [h('div', { class: 'group' }, nameRow), nameError,
+      h('div', { class: 'group' },
+        h('div', { class: 'group-row' }, h('label', { class: 'row-k', for: 'service-aliases', text: 'Apelidos' }), aliasInput),
+        urlRow)];
+
+  const form = h('form', { novalidate: '' },
+    builtin ? h('div', { class: 'service-head' },
+      serviceTile(service, 44),
+      h('div', { class: 'service-head-text' },
+        h('strong', { text: service.name }),
+        h('span', { text: `Link padrão: ${libraryDomain(service.default_url || service.login_url)}` }))) : null,
+    ...fields,
+    urlError,
+    builtin ? null : h('div', { class: 'group' },
+      h('div', { class: 'group-row stacked' },
+        h('div', { class: 'icon-head' }, h('span', { class: 'row-k', text: 'Ícone' }), preview),
+        iconSeg.el)),
+    error,
+    h('div', { class: 'modal-actions' }, actions));
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (submit.disabled) return;
+    error.textContent = '';
+    nameError.textContent = '';
+    urlError.textContent = '';
+    nameRow.classList.remove('invalid');
+    urlRow.classList.remove('invalid');
+    const data = {
+      name: builtin ? service.name : nameInput.value.trim(),
+      aliases: builtin ? service.aliases || [] : splitAliases(aliasInput.value),
+      login_url: urlInput.value.trim(),
+      icon: builtin ? service.icon || '' : iconSlug,
+    };
+    if (service) data.key = service.key;
+    if (!builtin && !data.name) {
+      nameRow.classList.add('invalid');
+      nameError.textContent = 'Informe o nome do serviço.';
+      nameInput.focus();
+      return;
+    }
+    submit.disabled = true;
+    submit.textContent = 'Salvando...';
+    const r = await call('save_service', data);
+    if (!r.ok) {
+      if (r.error === 'locked') return;
+      submit.disabled = false;
+      submit.textContent = 'Salvar';
+      const message = apiMessage(r, 'Não foi possível salvar o serviço.');
+      if (['name_required', 'name_too_long', 'name_exists'].includes(r.error)) {
+        nameRow.classList.add('invalid');
+        nameError.textContent = message;
+        nameInput.focus();
+      } else if (r.error === 'invalid_url') {
+        urlRow.classList.add('invalid');
+        urlError.textContent = message;
+        urlInput.focus();
+      } else {
+        error.textContent = message;
+      }
+      return;
+    }
+    closeModal();
+    await afterServiceChange();
+    toast(isNew ? 'Serviço adicionado' : 'Serviço salvo');
+  });
+
+  const title = isNew ? 'Adicionar serviço' : builtin ? 'Editar link' : 'Editar serviço';
+  const card = h('div', { class: 'modal', 'aria-labelledby': 'service-title' },
+    h('div', { class: 'modal-head' },
+      h('h2', { id: 'service-title', text: title }),
+      h('button', { class: 'btn btn-icon', type: 'button', 'aria-label': 'Fechar', onClick: closeModal }, icon('close', 18))),
+    form);
+  openModal(card);
+}
+
+function confirmDeleteService(service) {
+  const error = h('p', { class: 'msg error', role: 'alert' });
+  const confirmButton = h('button', { class: 'btn btn-primary danger', id: 'confirm-delete-service', type: 'button', 'data-autofocus': '' }, 'Excluir');
+  confirmButton.addEventListener('click', async () => {
+    confirmButton.disabled = true;
+    const r = await call('delete_service', service.key);
+    if (!r.ok) {
+      if (r.error === 'locked') return;
+      confirmButton.disabled = false;
+      error.textContent = apiMessage(r, 'Não foi possível excluir o serviço.');
+      return;
+    }
+    closeModal();
+    await afterServiceChange();
+    toast('Serviço excluído');
+  });
+  const card = h('div', { class: 'modal narrow', 'aria-labelledby': 'delete-service-title' },
+    h('h2', { id: 'delete-service-title', text: 'Excluir serviço?' }),
+    h('p', { class: 'lead' }, 'Você vai excluir ', h('strong', { text: service.name }), '. As contas já salvas continuam no cofre, mas deixam de usar o link e o ícone dele.'),
+    error,
+    h('div', { class: 'modal-actions' },
+      h('button', { class: 'btn btn-ghost', id: 'cancel-delete-service', type: 'button', onClick: closeModal }, 'Cancelar'),
+      confirmButton));
+  openModal(card, { dismissOnBackdrop: true });
 }
 
 /* ======================================================================

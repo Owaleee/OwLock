@@ -101,6 +101,7 @@ MIN_MASTER_PASSWORD_LENGTH = 8                                  (em vault.py; cr
 - [x] Interface nova em HTML/CSS/JS (pywebview), visual estilo iOS e logo própria
 - [x] Categorias (Fase 3)
 - [x] Tempos configuráveis, histórico de senhas, site da conta, tela de categorias (Fase 4)
+- [x] Biblioteca de serviços com links e ícones das plataformas (Fase 5)
 
 ## Próximos passos
 - App de celular lendo o mesmo formato de cofre.
@@ -273,3 +274,60 @@ open_url(id) -> {ok} | not_found | no_url | invalid_url | open_failed
 - Formulário: campo "Site" (URL). Detalhe: linha "Site" com o domínio e botão "Abrir site" (chama open_url).
 - Detalhe: seção "Histórico de senhas" (lista agrupada): "Criada em <data>", e cada versão "Senha anterior · alterada em <data>"
   com LED de força, botões Mostrar (revela só aquela, some ao trocar de conta/bloquear) e Copiar. Se vazio: "Esta senha nunca foi alterada."
+
+## Fase 5 — Biblioteca de serviços (links de login + ícones das plataformas)
+
+Pedido do Alexandre: ícones das plataformas e uma biblioteca com os links de login mais usados; ao digitar o nome da
+plataforma, o app preenche o link; uma área nos Ajustes para alterar links e adicionar novos.
+
+### Dados embutidos (já prontos, não editar à mão)
+- `owlock/core/data/services.json`: 67 serviços `{key, name, aliases, login_url, icon}` (icon = slug do ícone ou "" sem ícone).
+  Links sempre no domínio oficial (protege contra páginas falsas).
+- `owlock/core/data/brand_icons.json`: `{slug: {title, hex}}` (cor oficial da marca).
+- `owlock/web/icons/brands/<slug>.svg`: desenho BRANCO (Simple Icons, CC0). Gerados por `packaging/build_brand_icons.py`.
+
+### Núcleo — `owlock/core/catalog.py` (sem dependências; lê os JSON com importlib.resources ou caminho relativo ao módulo)
+- `normalize(text)`: casefold, sem acentos, só [a-z0-9] (remove espaços e pontuação). "Epic Games" → "epicgames"; "gov.br" → "govbr".
+- `Service` (dataclass): key, name, aliases, login_url, default_url, icon, color (hex da marca ou ""), builtin (bool), customized (bool).
+- `Catalog(custom_services, url_overrides)`: `all()` (embutidos com overrides aplicados + personalizados, ordem alfabética),
+  `get(key)`, `match(name) -> Service|None` (igualdade de normalize com nome ou apelido; personalizados têm prioridade),
+  `suggest(text, limit=6)` (prefixo do nome/apelido normalizado; depois "contém"; sem repetidos), `icons()` (lista de {slug, title}).
+- Conteúdo cifrado do cofre ganha `"services": {"custom": [...], "overrides": {key: url}}`; sem a chave → vazio.
+  Personalizado: `{key: "custom-<uuid>", name, aliases: [str], login_url, icon: "" ou slug existente}`.
+  `Vault.services` (dict) e `Vault.update_services(custom, overrides)` com rollback como os outros.
+- `Entry` ganha `icon: str = ""` — "" = automático (pelo nome via catálogo), "none" = letra, ou um slug existente.
+
+### Api (acréscimos e mudanças)
+```
+lookup_service(name) -> {ok, match: ServiceSummary|null, suggestions: [ServiceSummary]}         # exige cofre aberto
+    ServiceSummary = {key, name, aliases, login_url, default_url, icon, icon_url, color, builtin, customized}
+    icon_url = "icons/brands/<slug>.svg" ou null; color = hex da marca ou null
+list_services(query="") -> {ok, services: [ServiceSummary]}
+save_service(data) -> {ok, service} | name_required | name_too_long (>40) | name_exists | invalid_url | invalid_icon | too_many (>200) | not_found | save_failed
+    data = {key?, name, aliases: [str] (máx 10, cada até 40), login_url, icon}
+    sem key = novo personalizado; key embutida = só altera o link (override; nome/apelidos/ícone ignorados);
+    key personalizada = edita tudo. URL validada como em save_entry (só http/https).
+reset_service(key) -> {ok, service} | not_found        # embutido: remove o override
+delete_service(key) -> {ok} | not_found | builtin_service   # só personalizados
+brand_icons() -> {ok, icons: [{slug, title, icon_url, color}]}   # não exige cofre aberto
+EntrySummary ganha: icon (valor salvo), icon_url, icon_color, service_key (serviço reconhecido ou null)
+    resolução: icon "none" → sem ícone; slug → esse ícone; "" → ícone do serviço reconhecido pelo nome (se tiver)
+save_entry(data): data ganha icon ("" | "none" | slug existente; senão invalid_icon)
+open_url(id): se a conta não tem url, usa o login_url do serviço reconhecido (resposta inclui "source": "entry"|"library");
+    sem nenhum dos dois → no_url.
+```
+
+### Interface
+- Ícone da conta (lista, detalhe, formulário): ladrilho arredondado no estilo de ícone de app do iPhone, com o fundo na cor
+  da marca (se a cor for muito escura, usar grafite #2A2B31 com borda hairline) e o desenho branco (img src=icon_url).
+  Sem ícone → letra com o degradê da categoria (como hoje).
+- Formulário: ao digitar o Serviço, lista de sugestões (ícone + nome + domínio) estilo iOS abaixo do campo, navegável por
+  teclado (↑ ↓ Enter Esc). Escolher uma sugestão (ou correspondência exata ao sair do campo) preenche o nome e o Site
+  SE o Site estiver vazio ou ainda for o link preenchido automaticamente; mostra a nota "Link preenchido pela biblioteca".
+  Campo "Ícone": Automático / Letra / Escolher… (grade pesquisável com os ícones de brand_icons).
+- Detalhe: se a conta não tem site mas o serviço é reconhecido, a linha Site mostra o domínio da biblioteca com o rótulo
+  "da biblioteca" e o botão "Abrir login".
+- Ajustes > "Biblioteca de links" (e acesso pela tela Categorias? não — só Ajustes): busca, lista agrupada (ícone, nome,
+  domínio, selo "Personalizado" ou "Alterado"), toque abre editor: embutido = editar link + "Restaurar link padrão";
+  personalizado = nome, apelidos (separados por vírgula), link, ícone (Automático/Letra/grade) + Excluir (vermelho, confirmação).
+  Botão "Adicionar serviço".

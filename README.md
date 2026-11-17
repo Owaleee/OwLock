@@ -23,6 +23,8 @@ O OwLock guarda suas contas em um único arquivo criptografado, protegido por um
 - Categorias com cor e ícone, filtro por categoria e tela própria para criar e editar.
 - Histórico de senhas: data de criação da conta e cada senha anterior com a data da troca (até 20 versões), com opção de mostrar ou copiar.
 - Site da conta, com botão para abrir no navegador padrão.
+- Biblioteca de links com 67 serviços (Google, Steam, Epic Games, Discord, Netflix, Nubank, gov.br...): ao digitar o nome, o app sugere o serviço e preenche o link de login oficial. Os links podem ser alterados e novos serviços adicionados nos Ajustes.
+- Ícones das plataformas no estilo de ícone de app, embutidos no programa (sem baixar nada da internet), com opção de escolher outro ícone ou usar a letra.
 - Copiar login ou senha para a área de transferência, com contagem visual e limpeza automática (10 a 90 segundos; recomendado: 30).
 - Bloqueio automático após um tempo sem uso (1 a 30 minutos; recomendado: 5).
 - Backup automático (`.bak`) da versão anterior do arquivo e gravação atômica, que evita corromper o cofre se o programa for interrompido durante um salvamento.
@@ -204,9 +206,12 @@ Próximos passos previstos:
 - Geração de códigos TOTP.
 - Importação e exportação em CSV.
 - Categorias para organizar as contas.
-- Ícones das plataformas (Discord, Steam, GitHub...) embutidos no app, sem buscar nada na internet.
 - Preencher login e senha no site com uma extensão de navegador.
 - Formato de cofre v2 com Chave Secreta (para sincronizar com segurança entre computador e celular).
+
+## Créditos
+
+Ícones de marcas do projeto [Simple Icons](https://simpleicons.org) (CC0 1.0). As marcas pertencem aos seus respectivos donos e são usadas apenas para identificar cada serviço. Para atualizar os ícones, veja `packaging/build_brand_icons.py`.
 
 ## Licença
 

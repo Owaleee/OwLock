@@ -140,6 +140,22 @@ async function main() {
     log('cartões de resumo visíveis');
     await shot(page, '02-principal');
 
+    // ícones de marca na lista
+    const iconInfo = await page.evaluate(() => {
+      const out = {};
+      for (const row of document.querySelectorAll('#entry-list .row')) {
+        const name = row.querySelector('.row-name').textContent;
+        out[name] = { src: row.querySelector('.acc-icon img')?.getAttribute('src') || null, mono: row.querySelector('.mono-badge')?.textContent || null };
+      }
+      return out;
+    });
+    if (iconInfo.Discord?.src !== 'icons/brands/discord.svg') fail(`Discord deveria mostrar o ícone da marca: ${JSON.stringify(iconInfo.Discord)}`);
+    if (iconInfo['Epic Games']?.src || iconInfo['Epic Games']?.mono !== 'E') fail(`Epic Games (icon "none") deveria mostrar a letra: ${JSON.stringify(iconInfo['Epic Games'])}`);
+    const brokenImages = await page.$$eval('#entry-list .acc-icon', (tiles) => tiles.filter((t) => t.classList.contains('broken')).length);
+    if (brokenImages) fail('algum ícone de marca não carregou');
+    log('lista mostra ícones de marca (Discord) e a letra quando o ícone é "none" (Epic Games)');
+    await shot(page, '19-lista-icones');
+
     // (c) busca
     await page.type('#search', 'steam');
     await waitRows(page, 1, 'busca "steam"');
@@ -291,6 +307,75 @@ async function main() {
     await waitRows(page, 6, 'depois de excluir');
     log('exclusão pede confirmação e remove a conta (volta a 6)');
 
+    // biblioteca no formulário: sugestões, link, ícone
+    await page.click('#new-entry');
+    await page.waitForSelector('#form-service');
+    await page.type('#form-service', 'epic');
+    await page.waitForSelector('#service-suggestions:not([hidden]) .suggest-item');
+    const sugText = await page.$eval('#service-suggestions', (el) => el.textContent);
+    if (!sugText.includes('Epic Games')) fail(`sugestão "Epic Games" não apareceu: ${sugText}`);
+    const listbox = await page.evaluate(() => ({
+      role: document.querySelector('#service-suggestions').getAttribute('role'),
+      options: document.querySelectorAll('#service-suggestions [role="option"]').length,
+      expanded: document.querySelector('#form-service').getAttribute('aria-expanded'),
+      combo: document.querySelector('#form-service').getAttribute('role'),
+    }));
+    if (listbox.role !== 'listbox' || listbox.options < 1 || listbox.expanded !== 'true' || listbox.combo !== 'combobox') fail(`ARIA das sugestões inesperada: ${JSON.stringify(listbox)}`);
+    await shot(page, '21-sugestoes');
+    await page.click('#service-suggestions .suggest-item');
+    await page.waitForFunction(() => document.querySelector('#form-url').value.includes('epicgames.com/id/login'));
+    if ((await page.$eval('#form-service', (el) => el.value)) !== 'Epic Games') fail('o nome deveria virar "Epic Games"');
+    if (await page.$eval('#form-url-note', (el) => el.hidden)) fail('a nota "Link preenchido pela biblioteca" deveria aparecer');
+    log('digitar "epic" sugere Epic Games; escolher preenche o Site (epicgames.com/id/login) e mostra a nota');
+    await page.type('#form-url', 'x');
+    if (!(await page.$eval('#form-url-note', (el) => el.hidden))) fail('a nota deveria sumir quando o Site é editado');
+    log('editar o Site esconde a nota');
+
+    await page.click('#form-service', { clickCount: 3 });
+    await page.type('#form-service', 'steam');
+    await page.waitForSelector('#service-suggestions:not([hidden]) .suggest-item');
+    await page.keyboard.press('ArrowDown');
+    const active = await page.$eval('#form-service', (el) => el.getAttribute('aria-activedescendant'));
+    if (active !== 'suggest-opt-0') fail(`aria-activedescendant inesperado: ${active}`);
+    await page.keyboard.press('Escape');
+    if (!(await page.$eval('#service-suggestions', (el) => el.hidden))) fail('Esc deveria fechar as sugestões');
+    if (!(await page.$('#form-service'))) fail('Esc nas sugestões não deveria fechar o formulário');
+    log('teclado: ↓ ativa a opção (aria-activedescendant) e Esc fecha só as sugestões');
+
+    await page.click('#form-url', { clickCount: 3 });
+    await page.keyboard.press('Backspace');
+    await page.click('#form-service', { clickCount: 3 });
+    await page.type('#form-service', 'gov');
+    await page.waitForSelector('#service-suggestions:not([hidden])');
+    await page.click('#form-username');
+    await page.waitForFunction(() => document.querySelector('#form-url').value.includes('sso.acesso.gov.br'));
+    log('digitar "gov" e sair do campo preenche sso.acesso.gov.br (correspondência exata)');
+
+    await page.click('#form-icon-pick');
+    await page.waitForSelector('#brand-grid .brand-cell');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#brand-grid', { hidden: true });
+    if ((await page.$eval('#form-icon-auto', (el) => el.getAttribute('aria-checked'))) !== 'true') fail('cancelar a grade deveria manter "Automático"');
+    log('grade de ícones: Esc volta ao formulário e mantém o modo anterior');
+    await page.click('#form-icon-pick');
+    await page.waitForSelector('#brand-grid .brand-cell');
+    await page.type('#icon-search', 'git');
+    await page.waitForSelector('#brand-github');
+    await shot(page, '22-grade-icones');
+    await page.click('#brand-github');
+    await page.waitForSelector('#brand-grid', { hidden: true });
+    await page.waitForFunction(() => document.querySelector('#form-icon-preview img')?.getAttribute('src') === 'icons/brands/github.svg');
+    if (!(await page.$eval('#form-url', (el) => el.value.includes('sso.acesso.gov.br')))) fail('o que foi digitado no formulário deveria continuar lá');
+    await page.type('#form-password', 'Abc#12345xyz-ok');
+    await page.click('#form-submit');
+    await page.waitForSelector('#form-service', { hidden: true });
+    await page.waitForFunction(() => document.querySelector('.detail-head img')?.getAttribute('src') === 'icons/brands/github.svg');
+    log('ícone escolhido na grade (GitHub) aparece na conta salva');
+    await page.click('#delete-entry');
+    await page.waitForSelector('#confirm-delete');
+    await page.click('#confirm-delete');
+    await waitRows(page, 6, 'depois de excluir a conta com ícone manual');
+
     // categorias: criar, usar, excluir
     await page.click('#nav-categories');
     await page.waitForSelector('#category-group');
@@ -423,6 +508,112 @@ async function main() {
     await page.click('#confirm-delete');
     await waitRows(page, 6, 'depois de excluir a conta de site');
 
+    // conta sem site: link da biblioteca
+    await clickRow(page, 'Netflix');
+    await page.waitForFunction(() => document.querySelector('#detail-name')?.textContent === 'Netflix');
+    await page.waitForSelector('#detail-site-source');
+    const libSite = await page.$eval('#detail-site-row', (el) => el.textContent);
+    if (!libSite.includes('da biblioteca') || !libSite.includes('netflix.com') || !libSite.includes('Abrir login')) fail(`linha Site da biblioteca inesperada: ${libSite}`);
+    const [loginResponse] = await Promise.all([
+      page.waitForResponse((r) => r.url().includes('/api/open_url')),
+      page.click('#open-login'),
+    ]);
+    const loginOpened = await loginResponse.json();
+    if (!loginOpened.ok && loginOpened.error !== 'open_failed') fail(`open_url (biblioteca) devolveu ${JSON.stringify(loginOpened)}`);
+    log(`Netflix sem site mostra "da biblioteca" + Abrir login (respondeu ${loginOpened.ok ? 'ok' : loginOpened.error})`);
+    await shot(page, '20-detalhe-biblioteca');
+
+    // biblioteca de links nos Ajustes
+    await page.click('#nav-settings');
+    await page.waitForSelector('#settings-library');
+    await page.click('#settings-library');
+    await page.waitForSelector('#library-group .lib-row');
+    const libCount = (await page.$$('#library-group .lib-row')).length;
+    if (libCount < 60) fail(`a biblioteca deveria listar os serviços embutidos (achei ${libCount})`);
+    const libBadges = await page.$$eval('#library-group .badge-pill', (els) => els.map((e) => e.textContent));
+    if (!libBadges.includes('Personalizado')) fail('o serviço personalizado do seed deveria ter o selo "Personalizado"');
+    log(`biblioteca lista ${libCount} serviços, com selo "Personalizado" no do seed`);
+    await shot(page, '23-biblioteca');
+
+    await page.type('#library-search', 'steam');
+    await page.waitForFunction(() => {
+      const rows = [...document.querySelectorAll('#library-group .lib-row')];
+      return rows.length >= 1 && rows.length < 5 && rows.every((r) => /steam/i.test(r.textContent));
+    });
+    log('busca "steam" filtra a biblioteca');
+    const steamRow = '#library-group .lib-row[data-name="Steam"]';
+    await page.click(steamRow);
+    await page.waitForSelector('#service-url');
+    if (await page.$('#service-name')) fail('serviço embutido só deveria editar o link');
+    if (!(await page.$eval('#service-reset', (el) => el.disabled))) fail('Restaurar deveria estar desabilitado antes de alterar');
+    await shot(page, '24-editor-servico');
+    await page.click('#service-url', { clickCount: 3 });
+    await page.type('#service-url', 'ftp://invalido.exemplo');
+    await page.click('#service-submit');
+    await page.waitForFunction(() => document.querySelector('#service-url-error')?.textContent.length > 0);
+    log('link inválido mostra o erro do back-end no campo');
+    await page.click('#service-url', { clickCount: 3 });
+    await page.type('#service-url', 'steam.exemplo.com/entrar');
+    await page.click('#service-submit');
+    await page.waitForSelector('#service-url', { hidden: true });
+    await page.waitForFunction(() => document.querySelector('#library-group .lib-row[data-name="Steam"]')?.textContent.includes('Alterado'));
+    log('link alterado: selo "Alterado" aparece');
+    await page.click(steamRow);
+    await page.waitForSelector('#service-reset:not([disabled])');
+    await page.click('#service-reset');
+    await page.waitForSelector('#service-url', { hidden: true });
+    await page.waitForFunction(() => !document.querySelector('#library-group .lib-row[data-name="Steam"]')?.textContent.includes('Alterado'));
+    log('"Restaurar link padrão" remove o selo');
+
+    await page.click('#library-search', { clickCount: 3 });
+    await page.keyboard.press('Backspace');
+    await page.click('#library-add');
+    await page.waitForSelector('#service-name');
+    await page.type('#service-name', 'Meu Servidor');
+    await page.type('#service-aliases', 'meu srv, painel');
+    await page.type('#service-url', 'painel.exemplo.com');
+    await shot(page, '25-editor-personalizado');
+    await page.click('#service-submit');
+    await page.waitForSelector('#service-name', { hidden: true });
+    await page.type('#library-search', 'meu servidor');
+    await page.waitForFunction(() => {
+      const row = document.querySelector('#library-group .lib-row[data-name="Meu Servidor"]');
+      return row && row.textContent.includes('Personalizado');
+    });
+    log('serviço personalizado "Meu Servidor" adicionado');
+
+    await page.click('#nav-vault');
+    await page.waitForSelector('#new-entry');
+    await page.click('#new-entry');
+    await page.waitForSelector('#form-service');
+    await page.type('#form-service', 'meu servidor');
+    await page.click('#form-username');
+    await page.waitForFunction(() => document.querySelector('#form-url').value.includes('painel.exemplo.com'));
+    log('"meu servidor" no formulário preenche o link do serviço personalizado');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#form-service', { hidden: true });
+
+    await page.click('#nav-settings');
+    await page.waitForSelector('#settings-library');
+    await page.click('#settings-library');
+    await page.waitForSelector('#library-search');
+    await page.type('#library-search', 'meu servidor');
+    await page.waitForFunction(() => {
+      const rows = document.querySelectorAll('#library-group .lib-row');
+      return rows.length === 1 && rows[0].dataset.name === 'Meu Servidor';
+    });
+    await page.click('#library-group .lib-row[data-name="Meu Servidor"]');
+    await page.waitForSelector('#service-delete');
+    await page.click('#service-delete');
+    await page.waitForSelector('#confirm-delete-service');
+    await page.click('#confirm-delete-service');
+    await page.waitForFunction(() => !document.querySelector('#library-group .lib-row[data-name="Meu Servidor"]'));
+    log('serviço personalizado excluído com confirmação');
+    await page.click('#library-back');
+    await page.waitForSelector('#set-current');
+    await page.click('#nav-vault');
+    await page.waitForSelector('#entry-list .row');
+
     // (g) gerador, ajustes, celular
     await page.click('#nav-generator');
     await page.waitForFunction(() => document.querySelector('#gen-output')?.textContent.length >= 20);
@@ -457,6 +648,13 @@ async function main() {
     await page.keyboard.press('Escape');
     await page.waitForSelector('#form-service', { hidden: true });
     log('celular: formulário abre como sheet e Esc fecha');
+    await page.click('#nav-settings');
+    await page.waitForSelector('#settings-library');
+    await page.click('#settings-library');
+    await page.waitForSelector('#library-group .lib-row');
+    await shot(page, '26-celular-biblioteca');
+    await page.click('#nav-vault');
+    await page.waitForSelector('#new-entry');
     await page.setViewport({ width: 1280, height: 800, isMobile: false, deviceScaleFactor: 1 });
     await page.waitForSelector('#nav-lock');
 

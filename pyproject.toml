@@ -26,7 +26,7 @@ build-backend = "setuptools.build_meta"
 include = ["owlock*"]
 
 [tool.setuptools.package-data]
-owlock = ["web/*.html", "web/*.css", "web/*.js", "web/fonts/*", "web/img/*", "app/owlock.ico"]
+owlock = ["web/*.html", "web/*.css", "web/*.js", "web/fonts/*", "web/img/*", "web/icons/brands/*", "app/owlock.ico", "core/data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
