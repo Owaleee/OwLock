@@ -213,7 +213,7 @@ O arquivo fica em `dist/`. Para publicar uma nova versão, crie uma release no G
 
 Versões entregues e próximos passos estão no [ROADMAP.md](ROADMAP.md). Em resumo:
 
-- **v0.6:** senhas repetidas e antigas, bloqueio ao minimizar, backups com histórico, favoritas.
+- **v0.6:** ícone na bandeja do Windows com busca rápida e atalho global, senhas repetidas e antigas, bloqueio ao minimizar, backups com histórico, favoritas.
 - **v0.7:** atalhos de teclado, importar/exportar CSV, códigos 2FA opcionais.
 - **v0.8:** extensão de navegador para preencher login e senha.
 - **v1.0:** aplicativo de celular com pareamento por QR code e sincronização.

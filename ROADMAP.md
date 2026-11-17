@@ -14,7 +14,12 @@ O OwLock é um gerenciador de senhas local, offline e de código aberto. Este do
 
 ## Próximas versões
 
-### v0.6 — Saúde das senhas e proteção
+### v0.6 — Sempre à mão (ícone na bandeja), saúde das senhas e proteção
+- **Ícone nos ícones ocultos do Windows (bandeja do sistema)**, para o OwLock ficar sempre fácil de usar:
+  - fechar a janela minimiza para a bandeja em vez de encerrar (opção nos Ajustes);
+  - menu do ícone: **Abrir OwLock**, **Busca rápida**, **Gerar senha e copiar**, **Bloquear agora**, **Iniciar com o Windows** e **Sair**;
+  - **Busca rápida:** atalho global (ex.: Ctrl+Shift+Espaço) abre uma janelinha para achar a conta e copiar login ou senha sem abrir o app inteiro;
+  - o ícone mostra se o cofre está aberto ou bloqueado, e o bloqueio automático continua valendo com o app escondido.
 - Aviso de **senhas repetidas** em mais de uma conta (no filtro "Atenção").
 - Aviso de **senhas antigas**, sem troca há mais de um ano.
 - **Bloquear ao minimizar** e **ao travar o Windows** (opções nos Ajustes).
