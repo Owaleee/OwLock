@@ -37,16 +37,22 @@ O OwLock guarda suas contas em um único arquivo criptografado, protegido por um
 - **Backups com histórico:** até 20 versões cifradas do cofre, com opção de restaurar; ao trocar a senha mestra, todos passam a abrir só com a senha nova.
 - **Importar** contas do CSV exportado pelo Chrome, Edge, Gerenciador de Senhas do Google, Bitwarden ou Firefox, com prévia, detecção de contas repetidas e opção de apagar o CSV depois.
 - **Exportar** o cofre em CSV, com confirmação da senha mestra (o próprio OwLock importa esse arquivo de volta).
+- Uma só janela por cofre: abrir o OwLock de novo traz a janela que já está aberta (também quando ele está na bandeja).
 - **Atalhos de teclado:** Ctrl+F buscar, Ctrl+N nova conta, Ctrl+Shift+C copiar a senha da conta aberta e Ctrl+L bloquear.
 - Backup automático (`.bak`) da versão anterior do arquivo e gravação atômica, que evita corromper o cofre se o programa for interrompido durante um salvamento.
 
 ## Download (Windows)
 
-Baixe o `OwLock.exe` na página de [Releases](https://github.com/Owaleee/OwLock/releases) e abra. Não precisa instalar Python nem nada.
+Na página de [Releases](https://github.com/Owaleee/OwLock/releases/latest) há duas opções:
+
+- **`OwLock-Setup.exe` (recomendado):** instala só para o seu usuário, sem pedir administrador, com atalho no menu Iniciar e desinstalador em Configurações > Aplicativos. Para atualizar, basta rodar o instalador da versão nova. Desinstalar **não apaga** o seu cofre.
+- **`OwLock.exe` (portátil):** um único arquivo, sem instalação. Útil num pendrive.
+
+Não precisa instalar Python nem nada.
 
 O app usa o Microsoft Edge WebView2, que já vem instalado no Windows 10 e 11 atualizados.
 
-Como o executável não tem assinatura digital, o Windows SmartScreen pode mostrar um aviso na primeira vez: clique em **Mais informações** e depois em **Executar assim mesmo**. Se quiser conferir a integridade do download, compare o hash SHA-256 do arquivo com o `OwLock.exe.sha256` publicado na mesma release (`Get-FileHash OwLock.exe` no PowerShell).
+Como o executável não tem assinatura digital, o Windows SmartScreen pode mostrar um aviso na primeira vez: clique em **Mais informações** e depois em **Executar assim mesmo**. Se quiser conferir a integridade do download, compare o hash SHA-256 do arquivo com o `SHA256SUMS.txt` publicado na mesma release (`Get-FileHash OwLock-Setup.exe` no PowerShell).
 
 ## Executar a partir do código-fonte
 
@@ -168,12 +174,12 @@ owlock/
     api_desktop.py # métodos da bandeja e da busca rápida
     api_transfer.py # métodos de importar e exportar
     config.py      # preferências do aparelho (bandeja, atalho), fora do cofre
-    desktop/       # Windows: ícone na bandeja, atalho global, detecção de tela travada, iniciar com o Windows
+    desktop/       # Windows: bandeja, atalho global, tela travada, iniciar com o Windows, instância única
     devserver.py   # SÓ desenvolvimento: serve a interface no navegador (127.0.0.1) com a mesma Api via HTTP
   web/             # index.html, styles.css, app.js, bridge.js, fonts/, img/, icons/brands/
-packaging/         # executável (PyInstaller), ícone do app e script dos ícones de marcas
+packaging/         # executável (PyInstaller), instalador (Inno Setup), ícone do app e script dos ícones de marcas
 tests/             # pytest: núcleo, Api, servidor de desenvolvimento e teste ponta a ponta (e2e)
-.github/workflows/ # CI (Linux e Windows) e geração do OwLock.exe nas releases
+.github/workflows/ # CI (Linux e Windows), build de teste e geração do instalador e do OwLock.exe nas releases
 ```
 
 O núcleo (`owlock/core`) não depende da interface. Isso permite reaproveitar a lógica de cofre em outras interfaces, como uma API ou um aplicativo móvel. A interface (HTML, CSS e JavaScript) só conversa com o núcleo pela classe `Api`, em `owlock/app/api.py`. O servidor de desenvolvimento usa essa mesma classe, então a interface se comporta igual no navegador e na janela nativa.
@@ -221,7 +227,9 @@ pyinstaller --noconfirm --onefile --windowed --name OwLock \
 
 No Windows, o `--add-data` usa `;` como separador: `--add-data "owlock/web;owlock/web"`, como no workflow de release.
 
-O arquivo fica em `dist/`. Para publicar uma nova versão, atualize a versão em `owlock/__init__.py` e `pyproject.toml`, escreva as notas em `docs/releases/vX.Y.Z.md` (a primeira linha é o título) e envie a tag (`git tag vX.Y.Z && git push origin vX.Y.Z`): o workflow roda os testes, gera o `OwLock.exe` no Windows e cria a release com os arquivos anexados.
+O arquivo fica em `dist/`. Para gerar também o instalador, instale o [Inno Setup 6](https://jrsoftware.org/isinfo.php) e rode `iscc /DAppVersion=1.0.0 packaging\owlock.iss` (sai `dist/OwLock-Setup.exe`). O workflow **Build** faz os dois no GitHub sem publicar nada (aba Actions > Build > Run workflow).
+
+Para publicar uma nova versão, atualize a versão em `owlock/__init__.py` e `pyproject.toml`, escreva as notas em `docs/releases/vX.Y.Z.md` e crie a release no GitHub com a tag `vX.Y.Z` (ou envie a tag com `git push origin vX.Y.Z`, e o workflow cria a release com o título e as notas desse arquivo). O workflow roda os testes, confere se a tag bate com a versão, gera o instalador e o `OwLock.exe` e anexa tudo à release.
 
 ## Roteiro
 

@@ -44,6 +44,14 @@ São 130 bits aleatórios, mostrados no formato `OW2-XXXXX-XXXXX-XXXXX-XXXXX-XXX
 - **Bloquear ao travar o Windows:** o app verifica a cada 2 segundos se a tela de bloqueio está ativa. A tela de permissão de administrador (UAC) também conta como "travado", então o cofre pode bloquear quando ela aparece — escolha deliberada pelo lado seguro.
 - **Preferências do aparelho** (bandeja, atalho, iniciar com o Windows) ficam em `config.json`, fora do cofre, porque precisam valer com o cofre bloqueado. Esse arquivo não contém nenhum dado do cofre.
 - A **busca rápida** só mostra contas com o cofre aberto, e o bloqueio automático continua valendo com o app escondido na bandeja.
+- **Uma instância por cofre:** abrir o OwLock de novo só mostra a janela que já está aberta (mutex e evento nomeados do Windows, sem rede). Assim duas cópias nunca gravam o mesmo arquivo ao mesmo tempo.
+
+## Importar e exportar
+
+- **Exportar exige a senha mestra** e grava um CSV **sem criptografia**, com todas as senhas em texto puro, no lugar escolhido por você. Guarde-o como guardaria as senhas anotadas em papel e apague-o assim que não precisar mais.
+- **Importar** lê o CSV só depois de você escolher o arquivo. A prévia mostrada na interface nunca inclui senhas; as contas ficam na memória até você confirmar ou cancelar (ou o cofre bloquear) e são gravadas cifradas, num único salvamento.
+- Por padrão o OwLock **apaga o CSV importado** logo depois de gravar as contas. Uma exclusão comum não impede recuperação por ferramentas forenses; se o arquivo passou por uma pasta sincronizada na nuvem, confira também a lixeira do serviço.
+- Arquivos acima de 10 MB ou com mais de 20.000 linhas são recusados.
 
 ## O que o OwLock NÃO protege
 

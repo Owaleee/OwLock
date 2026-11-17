@@ -6,7 +6,7 @@ se tem 2FA e qual app autenticador, notas) num arquivo criptografado protegido p
 
 ## Fora de escopo (por enquanto)
 - Sincronização com celular (o formato do arquivo já é pensado para isso: ver "Formato do cofre").
-- Gerar códigos TOTP, importar/exportar de outros gerenciadores, CLI.
+- Gerar códigos TOTP, CLI.
 
 ## Critério de pronto do MVP
 1. Criar um cofre com senha mestra, adicionar uma conta, fechar o app, reabrir com a senha certa e ver a conta.
