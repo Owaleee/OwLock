@@ -35,6 +35,9 @@ O OwLock guarda suas contas em um único arquivo criptografado, protegido por um
 - **Saúde das senhas:** avisos de senha fraca, repetida em outras contas ou sem troca há mais de 1 ano, reunidos no filtro **Atenção**.
 - **Favoritas** no topo da lista.
 - **Backups com histórico:** até 20 versões cifradas do cofre, com opção de restaurar; ao trocar a senha mestra, todos passam a abrir só com a senha nova.
+- **Importar** contas do CSV exportado pelo Chrome, Edge, Gerenciador de Senhas do Google, Bitwarden ou Firefox, com prévia, detecção de contas repetidas e opção de apagar o CSV depois.
+- **Exportar** o cofre em CSV, com confirmação da senha mestra (o próprio OwLock importa esse arquivo de volta).
+- **Atalhos de teclado:** Ctrl+F buscar, Ctrl+N nova conta, Ctrl+Shift+C copiar a senha da conta aberta e Ctrl+L bloquear.
 - Backup automático (`.bak`) da versão anterior do arquivo e gravação atômica, que evita corromper o cofre se o programa for interrompido durante um salvamento.
 
 ## Download (Windows)
@@ -115,6 +118,7 @@ Este é um projeto pessoal e precisa ser usado com consciência dessas limitaç�
 - **Computador comprometido:** se o sistema estiver infectado por keylogger ou malware, nenhum gerenciador local oferece proteção suficiente.
 - **Dados na memória:** enquanto o cofre estiver desbloqueado, os dados ficam na memória do processo.
 - **Metadados:** o arquivo revela a quantidade de contas, mas não os nomes, logins, senhas, categorias ou links.
+- **Arquivos CSV não são protegidos:** o CSV exportado (e o que você baixa de outro gerenciador para importar) tem as senhas em texto puro. Apague-o assim que não precisar mais dele.
 - **Sem auditoria independente:** o código não passou por auditoria de segurança externa. Para uso crítico, considere também soluções auditadas, como [Bitwarden](https://bitwarden.com/) ou [KeePassXC](https://keepassxc.org/).
 
 ### Recomendação
@@ -153,6 +157,7 @@ owlock/
     secret_key.py  # Chave Secreta: geração, formato OW2-…, verificação
     keystore.py    # onde a Chave Secreta fica guardada (chaveiro do sistema ou arquivo protegido)
     health.py      # saúde das senhas: repetidas e antigas
+    transfer.py    # importar CSV (Chrome/Edge/Google, Bitwarden, Firefox, OwLock) e exportar CSV
     vault.py       # Vault: criar, abrir, CRUD, salvar (escrita atômica), trocar senha mestra
     generator.py   # gerador de senhas com `secrets`
     errors.py      # WrongPasswordError, VaultCorruptedError, VaultExistsError
@@ -161,6 +166,7 @@ owlock/
     api.py         # Api: única ponte entre a interface e o núcleo
     main.py        # abre a janela pywebview com a Api
     api_desktop.py # métodos da bandeja e da busca rápida
+    api_transfer.py # métodos de importar e exportar
     config.py      # preferências do aparelho (bandeja, atalho), fora do cofre
     desktop/       # Windows: ícone na bandeja, atalho global, detecção de tela travada, iniciar com o Windows
     devserver.py   # SÓ desenvolvimento: serve a interface no navegador (127.0.0.1) com a mesma Api via HTTP
@@ -221,9 +227,10 @@ O arquivo fica em `dist/`. Para publicar uma nova versão, crie uma release no G
 
 Versões entregues e próximos passos estão no [ROADMAP.md](ROADMAP.md). Em resumo:
 
-- **v0.7:** atalhos de teclado, importar/exportar CSV, códigos 2FA opcionais.
-- **v0.8:** extensão de navegador para preencher login e senha.
-- **v1.0:** aplicativo de celular com pareamento por QR code e sincronização.
+- **v1.0:** versão estável para o dia a dia, com instalador para Windows.
+- **v1.1:** códigos 2FA (TOTP) opcionais.
+- **v1.2:** extensão de navegador para preencher login e senha.
+- **v2.0:** aplicativo de celular com pareamento por QR code e sincronização.
 
 ## Créditos
 
