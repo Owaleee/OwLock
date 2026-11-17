@@ -429,3 +429,91 @@ delete_v1_backup() → {ok} | not_found       (apaga só o caminho registrado na
   "Apagar cópia antiga" (confirmação; avisa que ela ainda abre só com a senha).
 - Ajustes > "Chave Secreta e Kit de emergência": onde a chave está guardada (key_storage), botão "Ver Kit de emergência"
   (pede a senha mestra num sheet) e "Salvar Kit". Versão do app no rodapé dos Ajustes.
+
+## Fase 7 — v0.6: sempre à mão (bandeja), saúde das senhas, backups e favoritas
+
+### 1. Preferências do aparelho (não sensíveis) — `owlock/app/config.py`
+Algumas opções precisam valer com o cofre BLOQUEADO, então não podem ficar dentro do cofre cifrado.
+Arquivo `~/.owlock/config.json` (ao lado do cofre padrão; para `--vault` custom, `<pasta do cofre>/owlock-config.json`),
+escrita atômica, valores inválidos → padrão, nunca guarda nada do cofre (nem nomes de contas).
+```
+DesktopConfig: close_to_tray=True, lock_on_minimize=False, lock_on_session_lock=True,
+               quick_search_hotkey=True, start_with_windows=False (espelho do registro; o registro é a fonte da verdade)
+```
+
+### 2. Integração com o Windows — `owlock/app/desktop/` (cada módulo com implementação nula fora do Windows)
+- `tray.py`: ícone na bandeja com pystray (dependência `pystray>=0.19; sys_platform == "win32"`; no Linux/macOS sem bandeja).
+  Ícone: owlock/web/img/owlock-icon.png; variante "bloqueado" com o LED da fechadura apagado (cinza) gerada em memória com Pillow
+  (pystray já depende de Pillow). Título: "OwLock — aberto" / "OwLock — bloqueado".
+  Menu: Abrir OwLock (padrão, clique duplo) · Busca rápida (Ctrl+Shift+Espaço) · Gerar senha e copiar · Bloquear agora
+  (desabilitado se bloqueado) · ─ · Iniciar com o Windows (marcável) · ─ · Sair.
+- `hotkey.py`: atalho global Ctrl+Shift+Space via ctypes `RegisterHotKey` numa thread própria com laço de mensagens
+  (`GetMessageW`); `stop()` posta WM_QUIT na thread (`PostThreadMessageW`) e chama `UnregisterHotKey`. Se o registro falhar
+  (atalho em uso por outro programa), registra o erro e segue sem atalho (status exposto: hotkey_available).
+- `session.py`: detector de "Windows travado" por sondagem a cada 2 s: `OpenInputDesktop` + `GetUserObjectInformationW(UOI_NAME)`;
+  nome diferente de "Default" (ou falha ao abrir) = travado. Na transição destravado→travado chama o callback. Thread daemon.
+- `autostart.py`: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, valor "OwLock" = `"<exe>" --tray` (só quando empacotado,
+  `sys.frozen`; rodando do código-fonte: `"<pythonw>" -m owlock --tray`). `is_enabled()`, `enable()`, `disable()` com winreg.
+- Tudo isso orquestrado por `owlock/app/desktop/controller.py` (`DesktopController`), que recebe a Api, a janela principal,
+  a janela de busca rápida e funções injetáveis — testável sem Windows com objetos falsos.
+
+### 3. Janelas e ciclo de vida (`main.py`)
+- `owlock --tray`: inicia escondido na bandeja (usado pela inicialização com o Windows).
+- Janela principal: com close_to_tray, fechar (evento `closing`) esconde a janela e devolve False (cancela o fechamento);
+  só "Sair" (menu da bandeja) encerra de verdade (api.shutdown, para threads, remove o ícone). Sem bandeja (fora do Windows), fechar encerra.
+- Minimizar (evento `minimized`) com lock_on_minimize → api.lock() e a interface recebe o evento de bloqueio.
+- Windows travado com lock_on_session_lock → api.lock().
+- Busca rápida: segunda janela pywebview criada escondida no início, 560x420, sem redimensionar, sempre por cima, carregando
+  `index.html#quick` com a MESMA Api. Atalho/menu: se o cofre está bloqueado → mostra a janela principal no desbloqueio;
+  senão → mostra a busca rápida centralizada e com foco. Esc ou perder o foco → esconde.
+- Avisar a interface de mudanças vindas de fora (bloqueio pela bandeja/sessão): `window.evaluate_js("window.owlockEvent && owlockEvent('locked')")`.
+- "Gerar senha e copiar": gera 20 caracteres e copia com a mesma limpeza automática (não exige cofre aberto; prazo = 30 s se bloqueado).
+
+### 4. Saúde das senhas (Api, sem mudar o formato)
+- `reused`: a senha atual é igual (comparação em memória) à de outra conta. `stale`: sem troca há mais de 365 dias
+  (data = changed_at mais recente do histórico, senão created_at).
+- EntrySummary ganha `reused: bool`, `reused_count: int` (quantas OUTRAS contas usam a mesma senha), `stale: bool`, `favorite: bool`.
+- `attention` (filtro e stats) passa a incluir: score ≤ 2 OU reused OU stale. stats ganha `reused` e `stale` (contas).
+- Nunca expor qual é a senha repetida, só a contagem e (em get_entry) `reused_with: [{id, service}]`.
+
+### 5. Favoritas
+- `Entry.favorite: bool = False` (no fim da dataclass). `toggle_favorite(id) -> {ok, favorite}`.
+- list_entries: favoritas primeiro (depois ordem por serviço). Filtro novo `"favorites"`.
+
+### 6. Backups com histórico (núcleo)
+- Pasta `<cofre>.backups/` (permissão 700). Snapshot = cópia do arquivo v2 atual, nome `AAAAMMDD-HHMMSS.vault` (UTC).
+- Cria snapshot: no save se o último tiver mais de 1 hora (antes de gravar o novo); sempre antes de restaurar; sempre após migrar.
+  Mantém os 20 mais recentes.
+- Troca de senha mestra: TODOS os snapshots são atualizados para a nova senha (troca só `kdf.salt` e o bloco `key`, porque a
+  chave do cofre é a mesma e as entradas não dependem do salt) — snapshot inválido/de outro cofre é ignorado e reportado.
+  Assim nenhum backup continua abrindo com a senha antiga.
+- `Vault.list_backups() -> [{id, created_at, size, entries}]` (entries = tamanho da lista `entries` do JSON, sem decifrar).
+- `Vault.restore_backup(id, password)`: confere a senha, valida que o snapshot é do mesmo cofre (vault_id) e abre com a chave em
+  memória; snapshot do estado atual antes; substitui o arquivo atomicamente; recarrega em memória.
+- Api: `list_backups()`, `restore_backup(id, password)` → ok | wrong_password | not_found | corrupted | save_failed.
+
+### 7. Api — desktop
+```
+get_desktop_config() -> {ok, config, platform: "windows"|"other", tray_available, hotkey_available}   # não exige cofre aberto
+save_desktop_config(data) -> {ok, config}   # aplica na hora (autostart liga/desliga o registro)
+quick_hide() -> {ok}                         # a janela de busca rápida se esconde (chamado pela própria interface)
+quick_open_main(id?) -> {ok}                 # mostra a janela principal (opcional: selecionando a conta)
+generate_and_copy() -> {ok, clear_in, strength}  # para a bandeja e para a busca rápida
+```
+Esses métodos chamam callbacks registrados pelo DesktopController (`api.attach_desktop(controller)`); sem controller (devserver/testes)
+quick_hide/quick_open_main devolvem ok sem efeito.
+
+### 8. Interface
+- Lista: estrela (favorita) na linha e no detalhe (toggle com animação de mola); filtro "Favoritas" no segmented (Todas · Favoritas · Com 2FA · Atenção).
+- Saúde: no detalhe, avisos em pílulas: vermelho "Repetida em N contas" (lista os serviços em get_entry.reused_with, clicáveis),
+  âmbar "Sem troca há mais de 1 ano". LED da linha considera reused/stale. Cartão de resumo "precisa de atenção" usa o novo total;
+  tooltip/legenda com o detalhamento (fracas, repetidas, antigas).
+- Ajustes > "Backups": lista agrupada (data por extenso, nº de contas), "Restaurar" com sheet pedindo a senha e aviso
+  "O estado atual também vira um backup antes da restauração."
+- Ajustes > "Área de trabalho" (só se platform == "windows"): interruptores Manter na bandeja ao fechar · Bloquear ao minimizar ·
+  Bloquear ao travar o Windows · Atalho Ctrl+Shift+Espaço para busca rápida (mostra aviso se hotkey_available=false) · Iniciar com o Windows.
+- Rota `#quick` (busca rápida): layout compacto 560x420 sem barra lateral: campo de busca grande com foco, lista de até 8 resultados
+  (ícone, serviço, login; favoritas primeiro), ↑ ↓ para navegar, Enter = copiar senha, Ctrl+Enter = copiar login, ações visíveis por linha
+  (Copiar login, Copiar senha, Abrir site), toast compacto; Esc chama quick_hide; após copiar a senha, esconde em 600 ms.
+  Se bloqueado (locked), mostra mensagem curta e botão "Abrir OwLock" (quick_open_main).
+- `window.owlockEvent(nome)`: 'locked' leva à tela de desbloqueio (janela principal) ou à mensagem de bloqueado (#quick).

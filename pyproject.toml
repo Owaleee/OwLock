@@ -1,6 +1,6 @@
 [project]
 name = "owlock"
-version = "0.5.0"
+version = "0.6.0"
 description = "Gerenciador de senhas local e de código aberto, com cofre criptografado (Argon2id + AES-256-GCM)."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -11,6 +11,7 @@ dependencies = [
   "pywebview>=5",
   "pyperclip>=1.8",
   "keyring>=25",
+  "pystray>=0.19; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

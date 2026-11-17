@@ -11,20 +11,9 @@ O OwLock é um gerenciador de senhas local, offline e de código aberto. Este do
 | **v0.3.0** | Categorias, histórico de senhas, site da conta, tempos de bloqueio e de limpeza configuráveis |
 | **v0.4.0** | Biblioteca de links com 67 serviços, sugestões ao digitar, ícones das plataformas embutidos e serviços personalizados |
 | **v0.5.0** | Cofre v2 com Chave Secreta, chave do cofre separada, cada conta cifrada separadamente, Kit de emergência, migração automática e SECURITY.md |
+| **v0.6.0** | Ícone na bandeja do Windows, busca rápida com atalho global (Ctrl+Shift+Espaço), iniciar com o Windows, bloquear ao minimizar e ao travar o Windows, senhas repetidas e antigas, favoritas e backups com histórico |
 
 ## Próximas versões
-
-### v0.6 — Sempre à mão (ícone na bandeja), saúde das senhas e proteção
-- **Ícone nos ícones ocultos do Windows (bandeja do sistema)**, para o OwLock ficar sempre fácil de usar:
-  - fechar a janela minimiza para a bandeja em vez de encerrar (opção nos Ajustes);
-  - menu do ícone: **Abrir OwLock**, **Busca rápida**, **Gerar senha e copiar**, **Bloquear agora**, **Iniciar com o Windows** e **Sair**;
-  - **Busca rápida:** atalho global (ex.: Ctrl+Shift+Espaço) abre uma janelinha para achar a conta e copiar login ou senha sem abrir o app inteiro;
-  - o ícone mostra se o cofre está aberto ou bloqueado, e o bloqueio automático continua valendo com o app escondido.
-- Aviso de **senhas repetidas** em mais de uma conta (no filtro "Atenção").
-- Aviso de **senhas antigas**, sem troca há mais de um ano.
-- **Bloquear ao minimizar** e **ao travar o Windows** (opções nos Ajustes).
-- **Backups com histórico:** últimas versões cifradas do cofre, com "Restaurar backup".
-- **Favoritas** no topo da lista.
 
 ### v0.7 — Produtividade
 - **Atalhos de teclado:** Ctrl+F buscar, Ctrl+N nova conta, Ctrl+L bloquear, Ctrl+Shift+C copiar senha.

@@ -38,6 +38,13 @@ São 130 bits aleatórios, mostrados no formato `OW2-XXXXX-XXXXX-XXXXX-XXXXX-XXX
 - Textos vindos do cofre nunca são inseridos como HTML (proteção contra injeção de código); a página tem uma Content-Security-Policy restrita e não carrega nada da internet.
 - O botão de abrir site aceita apenas endereços `http`/`https`, e os links da biblioteca usam o domínio oficial de cada serviço.
 
+## Backups e área de trabalho
+
+- **Backups com histórico** ficam na pasta `<cofre>.backups/`, também cifrados e protegidos pela Chave Secreta. Ao trocar a senha mestra, todos os backups são atualizados para a senha nova; um backup que não puder ser atualizado é apagado, para nenhum continuar abrindo com a senha antiga.
+- **Bloquear ao travar o Windows:** o app verifica a cada 2 segundos se a tela de bloqueio está ativa. A tela de permissão de administrador (UAC) também conta como "travado", então o cofre pode bloquear quando ela aparece — escolha deliberada pelo lado seguro.
+- **Preferências do aparelho** (bandeja, atalho, iniciar com o Windows) ficam em `config.json`, fora do cofre, porque precisam valer com o cofre bloqueado. Esse arquivo não contém nenhum dado do cofre.
+- A **busca rápida** só mostra contas com o cofre aberto, e o bloqueio automático continua valendo com o app escondido na bandeja.
+
 ## O que o OwLock NÃO protege
 
 - **Computador comprometido.** Um keylogger ou malware rodando com o seu usuário pode capturar a senha mestra ao ser digitada, ler a Chave Secreta guardada no sistema e ler os dados enquanto o cofre está aberto. Nenhum gerenciador local resolve isso.

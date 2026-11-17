@@ -90,6 +90,14 @@ function strengthTone(score) {
   return score === 2 ? 'amber' : 'mint';
 }
 
+/* LED da conta: vermelho se fraca ou repetida, âmbar se razoável ou antiga, menta se segura. */
+function entryTone(entry) {
+  const score = entry.strength.score;
+  if (score <= 1 || entry.reused) return 'red';
+  if (score === 2 || entry.stale) return 'amber';
+  return 'mint';
+}
+
 function debounce(fn, wait) {
   let timer = null;
   return (...args) => {
@@ -113,6 +121,7 @@ const toastRoot = document.getElementById('toasts');
 const EMPTY_STATS = { total: 0, with_2fa: 0, attention: 0 };
 const TOUCH_EVERY_MS = 20000;
 const REVEAL_AUTOHIDE_MS = 30000;
+const FILTERS = [['all', 'Todas'], ['favorites', 'Favoritas'], ['2fa', 'Com 2FA'], ['attention', 'Atenção']];
 
 const state = {
   unlocked: false,
@@ -132,6 +141,7 @@ const state = {
   categories: [],
   categoryFilter: '', // '' = todas, 'none' = sem categoria, ou id
   settings: null, // { settings, options }
+  weakCount: 0, // contas fracas (calculado na lista sem filtros, se a Api não mandar)
   history: null, // { id, created_at, history }
   histReveal: null, // { id, index, text }
   options: { colors: [], icons: [] },
@@ -145,6 +155,7 @@ let tickTimer = null;
 let revealTimer = null;
 let copyTimer = null;
 let histTimer = null;
+let quickMode = false; // rota #quick: janela compacta de busca rápida
 let kitWipe = null; // descarta chave e senha da tela do Kit de emergência
 
 function wipeState() {
@@ -156,7 +167,7 @@ function wipeState() {
   Object.assign(state, {
     unlocked: false, view: 'vault', screen: 'list', filter: 'all', query: '', entries: [],
     stats: { ...EMPTY_STATS }, selected: null, revealed: null, copied: null, gen: null, deadline: 0,
-    categories: [], categoryFilter: '', settings: null, history: null, histReveal: null, services: [],
+    categories: [], categoryFilter: '', settings: null, history: null, histReveal: null, services: [], weakCount: 0,
   });
   ui = {};
   root.replaceChildren();
@@ -734,14 +745,31 @@ async function lockNow(notice = '') {
   await showEntry(notice);
 }
 
-window.addEventListener('owlock:locked', () => {
+/* Bloqueio vindo de fora (bandeja, sessão do Windows, Api): cada janela reage ao seu modo. */
+function handleExternalLock() {
+  if (quickMode) {
+    showQuickLocked();
+    return;
+  }
   if (kitWipe) {
     kitWipe();
     showEntry('O cofre foi bloqueado.');
     return;
   }
   lockNow('O cofre foi bloqueado.');
-});
+}
+
+window.addEventListener('owlock:locked', handleExternalLock);
+
+// A janela do aplicativo chama isto por evaluate_js quando algo fora da interface muda o estado.
+window.owlockEvent = (name, arg) => {
+  if (name === 'locked') handleExternalLock();
+  // a busca rápida pediu para abrir a janela principal nesta conta
+  if (name === 'select' && typeof arg === 'string' && state.unlocked) {
+    setView('vault');
+    goToEntry(arg);
+  }
+};
 
 function secondsLeft() {
   return Math.max(0, Math.ceil((state.deadline - Date.now()) / 1000));
@@ -843,14 +871,14 @@ function buildListColumn() {
     ui.search.focus();
   });
 
-  ui.tabs = [['all', 'Todas'], ['2fa', 'Com 2FA'], ['attention', 'Atenção']].map(([id, label]) =>
+  ui.tabs = FILTERS.map(([id, label]) =>
     h('button', {
       class: 'btn tab', type: 'button', role: 'tab', id: `tab-${id}`, 'data-filter': id,
       'aria-selected': id === state.filter ? 'true' : 'false',
       onClick: () => setFilter(id),
     }, label));
 
-  ui.tabsBox = h('div', { class: 'segmented', role: 'tablist', 'aria-label': 'Filtro', 'data-index': '0' },
+  ui.tabsBox = h('div', { class: 'segmented', role: 'tablist', 'aria-label': 'Filtro', 'data-index': '0', 'data-cols': String(FILTERS.length) },
     h('span', { class: 'seg-thumb', 'aria-hidden': 'true' }), ui.tabs);
   ui.catStrip = h('div', { class: 'cat-strip', id: 'cat-strip', role: 'group', 'aria-label': 'Categorias' });
   ui.catStripWrap = makeScrollStrip(ui.catStrip);
@@ -913,7 +941,7 @@ function setScreen(screen) {
 
 function syncTabs() {
   for (const tab of ui.tabs) tab.setAttribute('aria-selected', tab.dataset.filter === state.filter ? 'true' : 'false');
-  ui.tabsBox.dataset.index = String(Math.max(0, ['all', '2fa', 'attention'].indexOf(state.filter)));
+  ui.tabsBox.dataset.index = String(Math.max(0, FILTERS.findIndex(([id]) => id === state.filter)));
 }
 
 function setFilter(filter) {
@@ -934,6 +962,9 @@ async function loadEntries() {
   }
   state.entries = r.entries;
   state.stats = r.stats || { ...EMPTY_STATS };
+  if (state.filter === 'all' && !state.query && !state.categoryFilter) {
+    state.weakCount = state.entries.filter((entry) => entry.strength.score <= 2).length;
+  }
   if (state.selected) {
     const fresh = state.entries.find((entry) => entry.id === state.selected.id);
     if (fresh) state.selected = fresh;
@@ -943,11 +974,56 @@ async function loadEntries() {
   renderList();
 }
 
-function statCard(value, longLabel, shortLabel, tone, delay) {
+/* ---------- favoritas ---------- */
+
+function paintStar(button, favorite) {
+  button.classList.toggle('on', favorite);
+  button.setAttribute('aria-pressed', favorite ? 'true' : 'false');
+  button.setAttribute('aria-label', favorite ? 'Remover dos favoritos' : 'Favoritar');
+}
+
+function starButton(entry, where) {
+  const button = h('button', {
+    class: `btn star-btn star-${where}`, type: 'button', 'data-star-id': entry.id,
+    ...(where === 'detail' ? { id: 'detail-star' } : {}),
+  }, icon('star', where === 'detail' ? 20 : 16, 2));
+  paintStar(button, Boolean(entry.favorite));
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    toggleFavorite(entry);
+  });
+  return button;
+}
+
+async function toggleFavorite(entry) {
+  const r = await call('toggle_favorite', entry.id);
+  if (!r.ok) {
+    if (r.error !== 'locked') toast(apiMessage(r, 'Não foi possível atualizar os favoritos.'), 'warn');
+    return;
+  }
+  entry.favorite = r.favorite;
+  if (state.selected?.id === entry.id) state.selected.favorite = r.favorite;
+  for (const button of document.querySelectorAll(`[data-star-id="${CSS.escape(entry.id)}"]`)) {
+    paintStar(button, r.favorite);
+    if (r.favorite) {
+      button.classList.remove('pop');
+      void button.offsetWidth; // reinicia a animação de mola
+      button.classList.add('pop');
+    }
+  }
+  // deixa a animação terminar antes de reordenar (favoritas vão para o topo)
+  setTimeout(() => {
+    if (state.unlocked) loadEntries();
+  }, 480);
+}
+
+function statCard(value, longLabel, shortLabel, tone, delay, legend = '') {
   const card = h('div', { class: `stat ${tone}` },
     led(tone === 'red' ? 'red' : 'mint'),
     h('b', { text: String(value) }),
-    h('span', {}, h('span', { class: 'long', text: longLabel }), h('span', { class: 'short', text: shortLabel })));
+    h('span', {}, h('span', { class: 'long', text: longLabel }), h('span', { class: 'short', text: shortLabel })),
+    legend ? h('small', { class: 'stat-legend', id: 'attention-legend', text: legend }) : null);
+  if (legend) card.setAttribute('title', legend);
   if (delay != null) {
     card.classList.add('ow-in');
     setDelay(card, delay);
@@ -955,12 +1031,24 @@ function statCard(value, longLabel, shortLabel, tone, delay) {
   return card;
 }
 
+/* Detalhamento do cartão de atenção: "2 fracas · 1 repetida · 1 antiga" (sem zeros). */
+function attentionLegend() {
+  const { reused = 0, stale = 0 } = state.stats;
+  const weak = typeof state.stats.weak === 'number' ? state.stats.weak : state.weakCount;
+  const parts = [];
+  if (weak > 0) parts.push(`${weak} ${plural(weak, 'fraca', 'fracas')}`);
+  if (reused > 0) parts.push(`${reused} ${plural(reused, 'repetida', 'repetidas')}`);
+  if (stale > 0) parts.push(`${stale} ${plural(stale, 'antiga', 'antigas')}`);
+  return parts.join(' · ');
+}
+
 function renderStats() {
   const { total, with_2fa: withTwofa, attention } = state.stats;
+  const legend = attentionLegend();
   const build = (animated) => [
     statCard(total, plural(total, 'conta no cofre', 'contas no cofre'), plural(total, 'conta', 'contas'), '', animated ? 0 : null),
     statCard(withTwofa, 'com verificação em 2 etapas', 'com 2FA', 'mint', animated ? 60 : null),
-    statCard(attention, plural(attention, 'senha precisa de atenção', 'senhas precisam de atenção'), 'atenção', attention > 0 ? 'red' : 'mint', animated ? 120 : null),
+    statCard(attention, plural(attention, 'senha precisa de atenção', 'senhas precisam de atenção'), 'atenção', attention > 0 ? 'red' : 'mint', animated ? 120 : null, legend),
   ];
   const firstPaint = !ui.statsDesktop.firstChild;
   ui.statsDesktop.replaceChildren(...build(firstPaint));
@@ -999,8 +1087,8 @@ function renderList() {
     return;
   }
   const rows = state.entries.map((entry, index) => {
-    const score = entry.strength.score;
-    const warn = score <= 2;
+    const tone = entryTone(entry);
+    const warn = tone !== 'mint';
     const row = h('button', {
       class: 'btn row' + (state.selected?.id === entry.id ? ' is-selected' : ''),
       type: 'button', 'data-id': entry.id,
@@ -1010,9 +1098,11 @@ function renderList() {
       h('span', { class: 'row-text' },
         h('span', { class: 'row-name', text: entry.service }),
         h('span', { class: 'row-user', text: entry.username || '' })),
-      h('span', { class: `led ${strengthTone(score)}`, role: 'img', 'aria-label': warn ? 'Precisa de atenção' : 'Segura' }));
-    setDelay(row, Math.min(index, 12) * 55);
-    return row;
+      h('span', { class: 'star-slot', 'aria-hidden': 'true' }),
+      h('span', { class: `led ${tone}`, role: 'img', 'aria-label': warn ? 'Precisa de atenção' : 'Segura' }));
+    const item = h('div', { class: 'row-item' }, row, starButton(entry, 'row'));
+    setDelay(item, Math.min(index, 12) * 55);
+    return item;
   });
   ui.rows.replaceChildren(...rows);
 }
@@ -1171,7 +1261,9 @@ function renderDetail({ first = false } = {}) {
         h('h1', { id: 'detail-name', text: entry.service }),
         entry.category ? detailCategory(entry.category) : null,
         h('span', { text: `Atualizada ${timeAgo(entry.updated_at)}`.trim() })),
+      starButton(entry, 'detail'),
       h('button', { class: 'btn btn-ghost small', id: 'edit-entry', type: 'button', onClick: () => openEntryForm(entry) }, 'Editar')),
+    healthBlock(entry),
     h('div', { class: 'group' }, infoRows),
     h('div', { class: 'pw-box' },
       h('div', { class: 'pw-head' }, h('span', { class: 'k', text: 'Senha' }),
@@ -1191,6 +1283,52 @@ function renderDetail({ first = false } = {}) {
   ui.detail.append(card);
   paintPassword(false);
   loadHistory(entry);
+  if (entry.reused) loadReusedWith(entry);
+}
+
+/* ---------- saúde da senha (avisos em pílulas) ---------- */
+
+function healthBlock(entry) {
+  const pills = [];
+  if (entry.reused) {
+    const n = entry.reused_count || 1;
+    pills.push(h('span', { class: 'health-pill red', id: 'health-reused', text: `Repetida em ${n} ${plural(n, 'conta', 'contas')}` }));
+  }
+  if (entry.stale) {
+    pills.push(h('span', { class: 'health-pill amber', id: 'health-stale', text: 'Sem troca há mais de 1 ano' }));
+  }
+  if (!pills.length) return null;
+  return h('div', { class: 'health', id: 'health' },
+    h('div', { class: 'health-pills' }, pills),
+    entry.reused ? h('div', { class: 'health-with', id: 'health-with' }) : null);
+}
+
+async function loadReusedWith(entry) {
+  const r = await call('get_entry', entry.id);
+  if (!r.ok || state.selected?.id !== entry.id) return;
+  const holder = document.getElementById('health-with');
+  const list = r.entry?.reused_with || [];
+  if (!holder || !list.length) return;
+  holder.replaceChildren(
+    h('span', { class: 'health-with-label', text: 'Mesma senha em:' }),
+    ...list.map((other) => h('button', {
+      class: 'btn btn-chip health-link', type: 'button', 'data-id': other.id, onClick: () => goToEntry(other.id),
+    }, other.service)));
+}
+
+/* Seleciona uma conta mesmo que ela esteja fora do filtro atual. */
+async function goToEntry(id) {
+  if (!state.entries.some((entry) => entry.id === id)) {
+    state.query = '';
+    state.filter = 'all';
+    state.categoryFilter = '';
+    ui.search.value = '';
+    ui.searchClear.hidden = true;
+    syncTabs();
+    await loadEntries();
+  }
+  selectEntry(id, true);
+  ui.rows.querySelector(`.row[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' });
 }
 
 /* ---------- site e histórico de senhas ---------- */
@@ -2306,6 +2444,9 @@ function buildSettings() {
 
   ui.protection = h('div', { class: 'settings-stack ow-in', id: 'protection' });
   renderProtection();
+  ui.backupsBox = h('div', { class: 'settings-stack ow-in', id: 'backups' });
+  ui.desktopBox = h('div', { class: 'settings-stack ow-in', id: 'desktop' });
+  ui.desktopBox.hidden = true;
   const catCount = state.categories.length;
   ui.paneSettings.replaceChildren(
     h('div', { class: 'page-title' }, h('h1', { text: 'Ajustes' }), h('p', { text: 'Segurança e informações do cofre.' })),
@@ -2324,6 +2465,8 @@ function buildSettings() {
           h('span', { class: 'cat-row-count', text: String(state.services.length) }),
           h('span', { class: 'chev', 'aria-hidden': 'true' }, icon('chevron', 16, 2.4))))),
     ui.protection,
+    ui.backupsBox,
+    ui.desktopBox,
     h('div', { class: 'settings-stack ow-in' },
       h('h2', { class: 'group-title', text: 'Chave Secreta e Kit de emergência' }),
       h('div', { class: 'group' },
@@ -2343,6 +2486,151 @@ function buildSettings() {
           h('span', { class: 'row-v path', id: 'vault-path', text: state.status?.vault_path || '' })))),
     state.status?.app_version ? h('p', { class: 'app-version', id: 'app-version', text: `OwLock v${state.status.app_version}` }) : null);
   current.input.focus();
+  loadBackups();
+  loadDesktop();
+}
+
+/* ======================================================================
+   Backups (Ajustes > Backups)
+   ====================================================================== */
+
+const LONG_DATE = new Intl.DateTimeFormat('pt-BR', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+function longDate(iso) {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? String(iso || '') : LONG_DATE.format(date);
+}
+
+async function loadBackups() {
+  const box = ui.backupsBox;
+  if (!box) return;
+  const r = await call('list_backups');
+  if (!r.ok || box !== ui.backupsBox || !box.isConnected) return;
+  const items = r.backups || r.items || [];
+  const rows = items.map((backup, index) => h('div', { class: 'group-row backup-row', 'data-id': backup.id },
+    h('span', { class: 'backup-text' },
+      h('span', { class: 'backup-date', text: longDate(backup.created_at) }),
+      h('span', { class: 'backup-meta', text: `${backup.entries ?? 0} ${plural(backup.entries ?? 0, 'conta', 'contas')}` })),
+    h('button', { class: 'btn btn-chip', id: `restore-${index}`, type: 'button', 'aria-label': `Restaurar o backup de ${longDate(backup.created_at)}`, onClick: () => openRestoreSheet(backup) }, 'Restaurar')));
+  box.replaceChildren(
+    h('h2', { class: 'group-title', text: 'Backups' }),
+    items.length
+      ? h('div', { class: 'group', id: 'backups-list' }, rows)
+      : h('p', { class: 'hint', id: 'backups-empty', text: 'Ainda não há backups. Eles são criados sozinhos enquanto você usa o cofre.' }),
+    h('p', { class: 'hint', text: 'O OwLock guarda os 20 backups mais recentes, todos protegidos com a sua senha mestra atual.' }));
+}
+
+function openRestoreSheet(backup) {
+  const pw = passwordField({ id: 'restore-password', label: 'Senha mestra', autofocus: true });
+  const error = h('p', { class: 'msg error', id: 'restore-error', role: 'alert' });
+  const submit = h('button', { class: 'btn btn-primary', id: 'restore-submit', type: 'submit' }, 'Restaurar');
+  const form = h('form', { novalidate: '' },
+    h('p', { class: 'lead' }, 'Restaurar o backup de ', h('strong', { text: longDate(backup.created_at) }), '. As contas voltam ao estado daquele momento.'),
+    h('p', { class: 'notice', id: 'restore-notice', text: 'O estado atual também vira um backup antes da restauração.' }),
+    pw.el, error,
+    h('div', { class: 'modal-actions' },
+      h('button', { class: 'btn btn-ghost', id: 'restore-cancel', type: 'button', onClick: closeModal }, 'Cancelar'),
+      submit));
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (submit.disabled) return;
+    error.textContent = '';
+    if (!pw.input.value) {
+      error.textContent = 'Digite a senha mestra para restaurar.';
+      pw.input.focus();
+      return;
+    }
+    submit.disabled = true;
+    submit.textContent = 'Restaurando...';
+    const typed = pw.input.value;
+    const r = await call('restore_backup', backup.id, typed);
+    pw.input.value = '';
+    if (!r.ok) {
+      submit.disabled = false;
+      submit.textContent = 'Restaurar';
+      if (r.error === 'locked') return;
+      error.textContent = r.error === 'wrong_password' ? apiMessage(r, 'Senha mestra incorreta.') : apiMessage(r, 'Não foi possível restaurar o backup.');
+      pw.input.focus();
+      return;
+    }
+    closeModal();
+    state.selected = null;
+    state.query = '';
+    state.categoryFilter = '';
+    await Promise.all([loadCategories(), loadServices(), loadSettings()]);
+    await loadEntries();
+    if (state.entries.length) state.selected = state.entries[0];
+    renderList();
+    renderDetail();
+    loadBackups();
+    toast('Backup restaurado');
+  });
+  const card = h('div', { class: 'modal narrow', 'aria-labelledby': 'restore-title' },
+    h('div', { class: 'modal-head' },
+      h('h2', { id: 'restore-title', text: 'Restaurar backup' }),
+      h('button', { class: 'btn btn-icon', type: 'button', 'aria-label': 'Fechar', onClick: closeModal }, icon('close', 18))),
+    form);
+  openModal(card);
+}
+
+/* ======================================================================
+   Área de trabalho (Windows): bandeja, bloqueio e atalho
+   ====================================================================== */
+
+// Só para desenvolvimento: com ?desktop=windows na URL a seção aparece mesmo no servidor de teste,
+// para poder vê-la e fotografá-la. No aplicativo real a Api informa a plataforma e esta chave não existe.
+const DEV_DESKTOP = new URLSearchParams(location.search).get('desktop') === 'windows';
+
+const DESKTOP_DEFAULTS = {
+  close_to_tray: true, lock_on_minimize: false, lock_on_session_lock: true, quick_search_hotkey: true, start_with_windows: false,
+};
+
+const DESKTOP_ROWS = [
+  { key: 'close_to_tray', id: 'desk-tray', label: 'Manter na bandeja ao fechar' },
+  { key: 'lock_on_minimize', id: 'desk-minimize', label: 'Bloquear ao minimizar' },
+  { key: 'lock_on_session_lock', id: 'desk-session', label: 'Bloquear ao travar o Windows' },
+  { key: 'quick_search_hotkey', id: 'desk-hotkey', label: 'Atalho Ctrl+Shift+Espaço para busca rápida' },
+  { key: 'start_with_windows', id: 'desk-autostart', label: 'Iniciar com o Windows' },
+];
+
+async function loadDesktop() {
+  const box = ui.desktopBox;
+  if (!box) return;
+  const r = await call('get_desktop_config');
+  if (box !== ui.desktopBox || !box.isConnected) return;
+  const real = r.ok && r.platform === 'windows';
+  if (!real && !DEV_DESKTOP) return;
+  const info = r.ok ? r : {};
+  let config = { ...DESKTOP_DEFAULTS, ...(info.config || {}) };
+  const error = h('p', { class: 'msg error', id: 'desktop-error', role: 'alert' });
+  const rows = DESKTOP_ROWS.map((item) => {
+    const input = h('input', { class: 'ios-switch', type: 'checkbox', role: 'switch', id: item.id, ...(config[item.key] ? { checked: true } : {}) });
+    input.addEventListener('change', async () => {
+      error.textContent = '';
+      const wanted = input.checked;
+      const saved = await call('save_desktop_config', { ...config, [item.key]: wanted });
+      if (saved.ok && saved.config) {
+        config = { ...DESKTOP_DEFAULTS, ...saved.config };
+        input.checked = Boolean(config[item.key]);
+        toast('Ajuste salvo');
+      } else {
+        input.checked = !wanted;
+        if (saved.error !== 'locked') error.textContent = apiMessage(saved, 'Não foi possível salvar o ajuste.');
+      }
+    });
+    return h('label', { class: 'group-row switch-row', for: item.id }, h('span', { class: 'row-k grow', text: item.label }), input);
+  });
+  const hotkeyWarn = real && info.hotkey_available === false
+    ? h('p', { class: 'notice warn', id: 'desktop-hotkey-warning', text: 'O atalho Ctrl+Shift+Espaço está em uso por outro programa e não pôde ser registrado.' })
+    : null;
+  box.replaceChildren(...[
+    h('h2', { class: 'group-title', text: 'Área de trabalho' }),
+    h('div', { class: 'group', id: 'desktop-group' }, rows),
+    hotkeyWarn,
+    error,
+    h('p', { class: 'hint', text: 'Com o OwLock na bandeja, o cofre continua protegido pelo bloqueio automático e abre rápido pelo atalho.' }),
+  ].filter(Boolean));
+  box.hidden = false;
 }
 
 /* ======================================================================
@@ -2704,7 +2992,188 @@ function confirmDeleteService(service) {
 }
 
 /* ======================================================================
+   Busca rápida (rota #quick): janela compacta 560x420, sem barra lateral
+   ====================================================================== */
+
+const QUICK_LIMIT = 8;
+const QUICK_HIDE_DELAY_MS = 600;
+const quick = { search: null, list: null, entries: [], active: 0, seq: 0, built: false };
+
+function quickHide() {
+  return call('quick_hide');
+}
+
+async function bootQuick() {
+  quickMode = true;
+  document.body.classList.add('quick');
+  document.addEventListener('keydown', onQuickKey);
+  const reopen = () => refreshQuick();
+  window.addEventListener('focus', reopen);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) reopen();
+  });
+  await refreshQuick();
+}
+
+/* Reabrir: confere o estado, limpa a busca e foca o campo de novo. */
+async function refreshQuick() {
+  const status = await call('status');
+  if (!status.ok || !status.unlocked) {
+    showQuickLocked();
+    return;
+  }
+  if (!quick.built || !quick.search?.isConnected) buildQuick();
+  quick.search.value = '';
+  await runQuickSearch();
+  quick.search.focus();
+}
+
+function showQuickLocked() {
+  quick.built = false;
+  quick.entries = [];
+  quick.search = null;
+  quick.list = null;
+  const open = h('button', { class: 'btn btn-primary', id: 'quick-open-main', type: 'button', 'data-autofocus': '' }, 'Abrir OwLock');
+  open.addEventListener('click', async () => {
+    await call('quick_open_main');
+    await quickHide();
+  });
+  root.replaceChildren(h('div', { class: 'quick-locked', id: 'quick-locked' },
+    h('div', { class: 'kit-badge', 'aria-hidden': 'true' }, icon('lock', 32, 1.8)),
+    h('h1', { text: 'O cofre está bloqueado' }),
+    h('p', { text: 'Abra o OwLock e digite a senha mestra para buscar suas contas.' }),
+    open));
+  open.focus();
+}
+
+function buildQuick() {
+  quick.search = h('input', {
+    id: 'quick-search', type: 'text', placeholder: 'Buscar conta', autocomplete: 'off', spellcheck: 'false',
+    role: 'combobox', 'aria-label': 'Buscar conta', 'aria-controls': 'quick-list', 'aria-expanded': 'true', 'aria-autocomplete': 'list',
+  });
+  quick.search.addEventListener('input', debounce(runQuickSearch, 100));
+  quick.list = h('div', { class: 'quick-list', id: 'quick-list', role: 'listbox', 'aria-label': 'Resultados' });
+  root.replaceChildren(h('div', { class: 'quick-wrap' },
+    h('label', { class: 'quick-field' }, icon('search', 20), quick.search),
+    quick.list,
+    h('p', { class: 'quick-foot', text: '↑ ↓ navegar · Enter copia a senha · Ctrl+Enter copia o login · Esc fecha' })));
+  quick.built = true;
+}
+
+async function runQuickSearch() {
+  if (!quick.search) return;
+  const seq = ++quick.seq;
+  const r = await call('list_entries', quick.search.value.trim(), 'all', '');
+  if (seq !== quick.seq || !quick.list) return;
+  if (!r.ok) {
+    if (r.error !== 'locked') toast(apiMessage(r), 'warn');
+    return;
+  }
+  quick.entries = (r.entries || []).slice(0, QUICK_LIMIT);
+  quick.active = 0;
+  paintQuick();
+}
+
+function paintQuick() {
+  if (!quick.list) return;
+  if (!quick.entries.length) {
+    quick.list.replaceChildren(h('p', { class: 'quick-empty', id: 'quick-empty', text: 'Nenhuma conta encontrada.' }));
+    quick.search.removeAttribute('aria-activedescendant');
+    return;
+  }
+  const rows = quick.entries.map((entry, index) => {
+    const canOpen = Boolean(entry.url || entry.service_key);
+    const act = (id, label, iconName, handler) => h('button', {
+      class: 'btn quick-act', id: `${id}-${index}`, type: 'button', title: label, 'aria-label': `${label}: ${entry.service}`, tabindex: '-1',
+      onClick: (event) => {
+        event.stopPropagation();
+        handler(entry);
+      },
+    }, icon(iconName, 16, 2));
+    return h('div', {
+      class: 'quick-row' + (index === quick.active ? ' is-active' : ''), id: `quick-opt-${index}`, role: 'option',
+      'aria-selected': index === quick.active ? 'true' : 'false', 'data-id': entry.id,
+      onMousemove: () => {
+        if (quick.active !== index) {
+          quick.active = index;
+          markQuickActive();
+        }
+      },
+    },
+    monoBadge(entry, 32),
+    h('span', { class: 'quick-text' },
+      h('span', { class: 'quick-name', text: entry.service }),
+      h('span', { class: 'quick-user', text: entry.username || '' })),
+    entry.favorite ? h('span', { class: 'quick-fav', 'aria-label': 'Favorita', role: 'img' }, icon('star', 14, 2)) : null,
+    h('span', { class: 'quick-actions' },
+      act('quick-login', 'Copiar login', 'user', quickCopyLogin),
+      act('quick-pass', 'Copiar senha', 'lock', quickCopyPassword),
+      canOpen ? act('quick-site', 'Abrir site', 'external', quickOpenSite) : null));
+  });
+  quick.list.replaceChildren(...rows);
+  markQuickActive();
+}
+
+function markQuickActive() {
+  [...quick.list.querySelectorAll('.quick-row')].forEach((row, index) => {
+    const on = index === quick.active;
+    row.classList.toggle('is-active', on);
+    row.setAttribute('aria-selected', on ? 'true' : 'false');
+    if (on) row.scrollIntoView({ block: 'nearest' });
+  });
+  quick.search.setAttribute('aria-activedescendant', `quick-opt-${quick.active}`);
+}
+
+async function quickCopyLogin(entry) {
+  const r = await call('copy_field', entry.id, 'username');
+  if (r.ok) toast('Login copiado');
+  else if (r.error !== 'locked') toast(apiMessage(r, 'Não foi possível copiar.'), 'warn');
+}
+
+async function quickCopyPassword(entry) {
+  const r = await call('copy_field', entry.id, 'password');
+  if (!r.ok) {
+    if (r.error !== 'locked') toast(apiMessage(r, 'Não foi possível copiar.'), 'warn');
+    return;
+  }
+  toast('Senha copiada');
+  setTimeout(quickHide, QUICK_HIDE_DELAY_MS);
+}
+
+async function quickOpenSite(entry) {
+  const r = await call('open_url', entry.id);
+  if (!r.ok) {
+    if (r.error !== 'locked') toast(apiMessage(r, 'Não foi possível abrir o site.'), 'warn');
+    return;
+  }
+  toast('Abrindo o site...');
+  setTimeout(quickHide, QUICK_HIDE_DELAY_MS);
+}
+
+function onQuickKey(event) {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    quickHide();
+    return;
+  }
+  if (!quick.list || !quick.entries.length) return;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    const step = event.key === 'ArrowDown' ? 1 : -1;
+    quick.active = (quick.active + step + quick.entries.length) % quick.entries.length;
+    markQuickActive();
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    const entry = quick.entries[quick.active];
+    if (!entry) return;
+    if (event.ctrlKey || event.metaKey) quickCopyLogin(entry);
+    else quickCopyPassword(entry);
+  }
+}
+
+/* ======================================================================
    Início
    ====================================================================== */
 
-showEntry();
+if (location.hash === '#quick') bootQuick();
+else showEntry();

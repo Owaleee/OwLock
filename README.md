@@ -31,6 +31,10 @@ O OwLock guarda suas contas em um único arquivo criptografado, protegido por um
 - Ícones das plataformas no estilo de ícone de app, embutidos no programa (sem baixar nada da internet), com opção de escolher outro ícone ou usar a letra.
 - Copiar login ou senha para a área de transferência, com contagem visual e limpeza automática (10 a 90 segundos; recomendado: 30).
 - Bloqueio automático após um tempo sem uso (1 a 30 minutos; recomendado: 5).
+- **No Windows, sempre à mão:** ícone nos ícones ocultos da barra de tarefas (Abrir, Busca rápida, Gerar senha e copiar, Bloquear agora, Iniciar com o Windows), busca rápida pelo atalho **Ctrl+Shift+Espaço** de qualquer programa, opção de iniciar com o Windows e de bloquear ao minimizar ou ao travar o Windows (Win+L).
+- **Saúde das senhas:** avisos de senha fraca, repetida em outras contas ou sem troca há mais de 1 ano, reunidos no filtro **Atenção**.
+- **Favoritas** no topo da lista.
+- **Backups com histórico:** até 20 versões cifradas do cofre, com opção de restaurar; ao trocar a senha mestra, todos passam a abrir só com a senha nova.
 - Backup automático (`.bak`) da versão anterior do arquivo e gravação atômica, que evita corromper o cofre se o programa for interrompido durante um salvamento.
 
 ## Download (Windows)
@@ -148,6 +152,7 @@ owlock/
     crypto.py      # Argon2id, HKDF e AES-256-GCM
     secret_key.py  # Chave Secreta: geração, formato OW2-…, verificação
     keystore.py    # onde a Chave Secreta fica guardada (chaveiro do sistema ou arquivo protegido)
+    health.py      # saúde das senhas: repetidas e antigas
     vault.py       # Vault: criar, abrir, CRUD, salvar (escrita atômica), trocar senha mestra
     generator.py   # gerador de senhas com `secrets`
     errors.py      # WrongPasswordError, VaultCorruptedError, VaultExistsError
@@ -155,6 +160,9 @@ owlock/
   app/
     api.py         # Api: única ponte entre a interface e o núcleo
     main.py        # abre a janela pywebview com a Api
+    api_desktop.py # métodos da bandeja e da busca rápida
+    config.py      # preferências do aparelho (bandeja, atalho), fora do cofre
+    desktop/       # Windows: ícone na bandeja, atalho global, detecção de tela travada, iniciar com o Windows
     devserver.py   # SÓ desenvolvimento: serve a interface no navegador (127.0.0.1) com a mesma Api via HTTP
   web/             # index.html, styles.css, app.js, bridge.js, fonts/, img/, icons/brands/
 packaging/         # executável (PyInstaller), ícone do app e script dos ícones de marcas
@@ -213,7 +221,6 @@ O arquivo fica em `dist/`. Para publicar uma nova versão, crie uma release no G
 
 Versões entregues e próximos passos estão no [ROADMAP.md](ROADMAP.md). Em resumo:
 
-- **v0.6:** ícone na bandeja do Windows com busca rápida e atalho global, senhas repetidas e antigas, bloqueio ao minimizar, backups com histórico, favoritas.
 - **v0.7:** atalhos de teclado, importar/exportar CSV, códigos 2FA opcionais.
 - **v0.8:** extensão de navegador para preencher login e senha.
 - **v1.0:** aplicativo de celular com pareamento por QR code e sincronização.

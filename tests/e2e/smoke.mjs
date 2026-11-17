@@ -196,6 +196,7 @@ async function createScenario(browser) {
   if (typedValue !== key) fail(`maiúsculas automáticas: esperava ${key}, veio ${typedValue}`);
   await page.keyboard.press('Enter');
   await page.waitForSelector('#new-entry');
+  await page.waitForSelector('#detail-empty'); // fim do carregamento da tela principal
   log('a Chave certa (digitada em minúsculas) abre o cofre e passa a ficar guardada de novo');
   await page.close();
 }
@@ -269,11 +270,57 @@ async function main() {
     await waitRows(page, 6, 'busca limpa');
 
     await page.click('#tab-attention');
-    await page.waitForFunction(() => document.querySelector('.segmented').dataset.index === '2');
-    await waitRows(page, 1, 'aba Atenção');
+    await page.waitForFunction(() => document.querySelector('.segmented').dataset.index === '3');
+    await waitRows(page, 4, 'aba Atenção');
     await page.click('#tab-all');
     await waitRows(page, 6, 'aba Todas');
-    log('segmented control troca de aba (Atenção = 1 conta)');
+    log('segmented control de 4 opções troca de aba (Atenção = 4 contas: fraca, 2 repetidas, 1 antiga)');
+
+    // favoritas e saúde das senhas
+    const topNames = async (n) => (await page.$$eval('#entry-list .row .row-name', (els) => els.map((el) => el.textContent))).slice(0, n);
+    const starOf = (name) => page.evaluateHandle((wanted) => [...document.querySelectorAll('#entry-list .row-item')]
+      .find((item) => item.querySelector('.row-name').textContent === wanted).querySelector('.star-btn'), name);
+    if ((await topNames(2)).join(',') !== 'GitHub,Google') fail(`favoritas deveriam vir primeiro: ${(await topNames(6)).join(',')}`);
+    const stars = await page.$$eval('#entry-list .star-btn', (els) => els.map((el) => [el.getAttribute('aria-label'), el.getAttribute('aria-pressed')]));
+    if (stars.filter(([, pressed]) => pressed === 'true').length !== 2 || !stars.some(([label]) => label === 'Remover dos favoritos') || !stars.some(([label]) => label === 'Favoritar')) fail(`estrelas inesperadas: ${JSON.stringify(stars)}`);
+    log('Google e GitHub (favoritas) aparecem primeiro; estrelas com aria-label e aria-pressed');
+    await shot(page, '31-lista-estrelas');
+    await (await starOf('Steam')).click();
+    await page.waitForFunction(() => [...document.querySelectorAll('#entry-list .row .row-name')].slice(0, 3).some((el) => el.textContent === 'Steam'));
+    if ((await topNames(3)).join(',') !== 'GitHub,Google,Steam') fail('Steam favoritada deveria subir para o topo');
+    await (await starOf('Steam')).click();
+    await page.waitForFunction(() => ![...document.querySelectorAll('#entry-list .row .row-name')].slice(0, 3).some((el) => el.textContent === 'Steam'));
+    log('estrela marca (a conta sobe) e desmarca (volta à ordem normal)');
+    await page.click('#tab-favorites');
+    await page.waitForFunction(() => document.querySelector('.segmented').dataset.index === '1');
+    await waitRows(page, 2, 'filtro Favoritas');
+    log('filtro Favoritas mostra só as 2 favoritas e o polegar desliza');
+    await page.click('#tab-all');
+    await waitRows(page, 6, 'aba Todas depois de Favoritas');
+    const legend = await page.$eval('#attention-legend', (el) => el.textContent);
+    if (!/^\d+ fracas? · 2 repetidas · 1 antiga$/.test(legend)) fail(`legenda do cartão de atenção inesperada: "${legend}"`);
+    log(`cartão "precisa de atenção" tem a legenda "${legend}"`);
+
+    await clickRow(page, 'Netflix');
+    await page.waitForFunction(() => document.querySelector('#detail-name')?.textContent === 'Netflix');
+    await page.waitForFunction(() => document.querySelector('#health-reused')?.textContent === 'Repetida em 1 conta');
+    await page.waitForSelector('#health-with .health-link');
+    const linkText = await page.$eval('#health-with .health-link', (el) => el.textContent);
+    if (linkText !== 'Steam') fail(`a senha de Netflix repete a de Steam, mas o link diz "${linkText}"`);
+    await shot(page, '32-detalhe-saude');
+    await page.click('#health-with .health-link');
+    await page.waitForFunction(() => document.querySelector('#detail-name')?.textContent === 'Steam');
+    log('Netflix mostra "Repetida em 1 conta"; clicar em Steam seleciona a conta');
+    await clickRow(page, 'Epic Games');
+    await page.waitForFunction(() => document.querySelector('#detail-name')?.textContent === 'Epic Games');
+    await page.waitForFunction(() => document.querySelector('#health-stale')?.textContent === 'Sem troca há mais de 1 ano');
+    log('conta antiga do seed (Epic Games) mostra "Sem troca há mais de 1 ano"');
+    await page.click('#detail-star');
+    await page.waitForFunction(() => document.querySelector('#detail-star')?.getAttribute('aria-pressed') === 'true');
+    await page.click('#detail-star');
+    await page.waitForFunction(() => document.querySelector('#detail-star')?.getAttribute('aria-pressed') === 'false');
+    log('estrela do detalhe marca e desmarca');
+    await sleep(700);
 
     // categorias: faixa, filtro e combinação com a aba Atenção
     const counts = await pillCounts(page);
@@ -327,9 +374,9 @@ async function main() {
     log('categoria Jogos filtra Steam/Discord/Epic');
     await shot(page, '12-faixa-categorias');
     await page.click('#tab-attention');
-    await waitRows(page, 1, 'Jogos + Atenção');
-    if ((await rowNames(page))[0] !== 'Discord') fail('Jogos + Atenção deveria mostrar só o Discord');
-    log('Jogos + Atenção = Discord');
+    await waitRows(page, 3, 'Jogos + Atenção');
+    if ((await rowNames(page)).join(',') !== 'Discord,Epic Games,Steam') fail('Jogos + Atenção deveria mostrar Discord, Epic Games e Steam');
+    log('Jogos + Atenção = Discord (fraca), Epic Games (antiga) e Steam (repetida)');
     await page.click('#tab-all');
     await clickCategory(page, 'Jogos');
     await waitRows(page, 6, 'categoria desmarcada');
@@ -732,6 +779,43 @@ async function main() {
     await page.waitForSelector('#vault-path');
     await shot(page, '06-ajustes');
 
+    // backups
+    await page.waitForSelector('#backups-list .backup-row');
+    const backupCount = (await page.$$('#backups-list .backup-row')).length;
+    if (backupCount < 2) fail(`esperava 2+ backups, achei ${backupCount}`);
+    if (!(await page.$eval('#desktop', (el) => el.hidden))) fail('a seção Área de trabalho não deveria aparecer fora do Windows');
+    await page.evaluate(() => document.querySelector('#backups').scrollIntoView({ block: 'start' }));
+    await shot(page, '33-backups');
+    await page.click('#restore-0');
+    await page.waitForSelector('#restore-password');
+    if (!(await page.$eval('#restore-notice', (el) => el.textContent.includes('também vira um backup')))) fail('aviso da restauração ausente');
+    await page.type('#restore-password', 'senha-errada-xyz');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelector('#restore-error')?.textContent.length > 0);
+    log(`Backups lista ${backupCount} itens; restaurar com senha errada mostra o erro`);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#restore-password', { hidden: true });
+
+    // Área de trabalho (só com ?desktop=windows no servidor de teste)
+    const deskPage = await browser.newPage();
+    await deskPage.setViewport({ width: 1280, height: 800 });
+    deskPage.setDefaultTimeout(TIMEOUT);
+    await deskPage.goto(`${BASE}/?desktop=windows`, { waitUntil: 'load' });
+    await deskPage.waitForSelector('#nav-settings');
+    await deskPage.click('#nav-settings');
+    await deskPage.waitForSelector('#desktop-group');
+    const switches = await deskPage.$$eval('#desktop-group .ios-switch', (els) => els.map((el) => el.id));
+    if (switches.length !== 5) fail(`esperava 5 interruptores na Área de trabalho: ${switches}`);
+    await deskPage.evaluate(() => document.querySelector('#desktop').scrollIntoView({ block: 'center' }));
+    await shot(deskPage, '34-area-de-trabalho');
+    await deskPage.click('label[for="desk-minimize"]');
+    await deskPage.waitForFunction(() => document.querySelector('#desk-minimize').checked === true);
+    await deskPage.click('label[for="desk-minimize"]');
+    await deskPage.waitForFunction(() => document.querySelector('#desk-minimize').checked === false);
+    log('?desktop=windows mostra a Área de trabalho com 5 interruptores que salvam');
+    await deskPage.close();
+    await page.bringToFront();
+
     // Chave Secreta e Kit de emergência nos Ajustes
     const storage = await page.$eval('#key-storage', (el) => el.textContent.trim());
     if (!storage) fail('"Guardada em" deveria mostrar onde a Chave Secreta fica');
@@ -789,12 +873,59 @@ async function main() {
     await page.setViewport({ width: 1280, height: 800, isMobile: false, deviceScaleFactor: 1 });
     await page.waitForSelector('#nav-lock');
 
+    // busca rápida (#quick) compartilhando a sessão do devserver
+    const quickPage = await browser.newPage();
+    await quickPage.setViewport({ width: 560, height: 420 });
+    quickPage.setDefaultTimeout(TIMEOUT);
+    await quickPage.goto(`${BASE}/#quick`, { waitUntil: 'load' });
+    await quickPage.bringToFront();
+    await quickPage.waitForSelector('#quick-search');
+    await quickPage.waitForFunction(() => document.activeElement?.id === 'quick-search').catch(() => fail('o campo da busca rápida deveria ter foco'));
+    if (await quickPage.$('.rail')) fail('a busca rápida não deveria ter barra lateral');
+    await quickPage.type('#quick-search', 'ste');
+    await quickPage.waitForFunction(() => document.querySelector('#quick-list .quick-row .quick-name')?.textContent === 'Steam');
+    log('#quick: campo com foco, sem barra lateral; "ste" mostra Steam primeiro');
+    await shot(quickPage, '35-busca-rapida');
+    await quickPage.keyboard.press('Enter');
+    await quickPage.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /Senha copiada|transfer/.test(t.textContent)));
+    log('Enter copia a senha (aviso se não houver área de transferência)');
+    const [hideResponse] = await Promise.all([
+      quickPage.waitForResponse((r) => r.url().includes('/api/quick_hide')),
+      quickPage.keyboard.press('Escape'),
+    ]);
+    if (!(await hideResponse.json()).ok) fail('quick_hide deveria responder ok');
+    log('Esc chama quick_hide (ok)');
+    await quickPage.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await quickPage.waitForFunction(() => document.querySelector('#quick-search')?.value === '' && document.activeElement?.id === 'quick-search');
+    log('reabrir (evento focus) limpa a busca e foca de novo');
+    await quickPage.evaluate(() => window.owlockEvent('locked'));
+    await quickPage.waitForSelector('#quick-locked');
+    if ((await quickPage.evaluate(() => document.body.textContent)).includes('Steam')) fail('contas ficaram na tela da busca rápida bloqueada');
+    log('owlockEvent("locked") na busca rápida mostra o estado bloqueado');
+
     // bloqueio
+    await page.bringToFront();
     await page.click('#nav-lock');
     await page.waitForSelector('#unlock-password');
     const leftovers = await page.evaluate(() => document.body.textContent.includes('discord2021') || !!document.querySelector('#entry-list'));
     if (leftovers) fail('restos do cofre no DOM depois de bloquear');
     log('Bloquear volta ao desbloqueio e limpa a tela');
+
+    await quickPage.goto(`${BASE}/#quick`, { waitUntil: 'load' });
+    await quickPage.reload({ waitUntil: 'load' });
+    await quickPage.waitForSelector('#quick-locked');
+    await quickPage.waitForSelector('#quick-open-main');
+    await shot(quickPage, '36-busca-rapida-bloqueada');
+    log('#quick com o cofre bloqueado mostra a mensagem e "Abrir OwLock"');
+    await quickPage.close();
+
+    await page.type('#unlock-password', PASSWORD);
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('#entry-list .row');
+    await page.evaluate(() => window.owlockEvent('locked'));
+    await page.waitForSelector('#unlock-password');
+    if (await page.$('#entry-list')) fail('owlockEvent("locked") deveria limpar a tela principal');
+    log('owlockEvent("locked") na janela principal volta ao desbloqueio');
 
     await createScenario(browser);
 
