@@ -246,15 +246,15 @@ def test_save_emergency_kit(path, store, created, tmp_path):
     assert key not in json.dumps(r)
 
 
-def test_save_emergency_kit_escapes_values(tmp_path, store):
-    nasty = tmp_path / "<script>alert(1)</script>&\"x\".vault"
-    target = tmp_path / "kit.html"
-    api = make_api(nasty, store, Dialog(str(target)))
-    api.create_vault(PW, PW)
-    assert api.save_emergency_kit(PW)["ok"]
-    html_text = target.read_text(encoding="utf-8")
-    assert "<script" not in html_text
+def test_save_emergency_kit_escapes_values():
+    """Todos os valores do Kit passam por html.escape (testado direto: o Windows proíbe < > " em nomes de arquivo)."""
+    from owlock.app.api import _kit_html
+
+    nasty = '<script>alert(1)</script>&"x".vault'
+    html_text = _kit_html("OW2-<b>", "<id>", nasty, "<data>")
+    assert "<script" not in html_text and "<b>" not in html_text
     assert "&lt;script&gt;alert(1)&lt;/script&gt;&amp;&quot;x&quot;.vault" in html_text
+    assert "OW2-&lt;b&gt;" in html_text and "&lt;data&gt;" in html_text
 
 
 def test_save_emergency_kit_adds_html_extension(path, store, created, tmp_path):

@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import inspect
+import tempfile
 import json
 import mimetypes
 from http import HTTPStatus
@@ -32,8 +33,8 @@ def dev_store(vault_path: Path) -> FileStore:
 
 
 def make_save_dialog(directory: Path | None = None):
-    """save_dialog de desenvolvimento: devolve /tmp/owlock-kit-<n>.html (n cresce a cada chamada)."""
-    base = Path(directory) if directory is not None else Path("/tmp")
+    """save_dialog de desenvolvimento: devolve <pasta temporária>/owlock-kit-<n>.html (n cresce a cada chamada)."""
+    base = Path(directory) if directory is not None else Path(tempfile.gettempdir())
     counter = {"n": 0}
 
     def save_dialog(default_name: str) -> str:

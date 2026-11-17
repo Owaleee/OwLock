@@ -1,6 +1,7 @@
 import http.client
 import json
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -145,7 +146,8 @@ def test_dev_save_dialog_numbers_files_in_given_dir(tmp_path):
     dialog = make_save_dialog(tmp_path)
     assert dialog("a.html") == str(tmp_path / "owlock-kit-1.html")
     assert dialog("a.html") == str(tmp_path / "owlock-kit-2.html")
-    assert make_save_dialog().__call__("x").startswith("/tmp/owlock-kit-")
+    import tempfile
+    assert make_save_dialog().__call__("x").startswith(str(Path(tempfile.gettempdir()) / "owlock-kit-"))
 
 
 def test_seed_vault_uses_file_store_next_to_it(tmp_path):
