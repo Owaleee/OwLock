@@ -41,9 +41,11 @@ from owlock.core import (
     generate_password,
 )
 from owlock.core.catalog import Catalog, Service, brand_icons, icon_url, normalize
+from owlock.core.health import password_health
 from owlock.core.strength import password_strength
+from owlock.app.api_desktop import DesktopApiMixin
 
-_FILTERS = ("all", "2fa", "attention")
+_FILTERS = ("all", "favorites", "2fa", "attention")
 _FIELDS = ("username", "password")
 _ATTENTION_MAX_SCORE = 2
 _MAX_CATEGORY_NAME = 24
@@ -202,7 +204,7 @@ def _not_found() -> dict[str, Any]:
     return _error("not_found", "Conta não encontrada.")
 
 
-class Api:
+class Api(DesktopApiMixin):
     """Ponte entre a interface e o núcleo. Thread-safe (RLock)."""
 
     def __init__(
@@ -330,8 +332,26 @@ class Api:
             "customized": service.customized,
         }
 
-    def _summary(self, entry: Entry, catalog: Catalog | None = None) -> dict[str, Any]:
+    def _health(self) -> dict[str, dict[str, Any]]:
+        """Saúde das senhas (repetidas/antigas) de todas as contas; só em memória."""
+        assert self._vault is not None
+        return password_health(self._vault.entries, self._vault.clock())
+
+    def _needs_attention(self, entry: Entry, health: dict[str, Any]) -> bool:
+        return (
+            password_strength(entry.password)["score"] <= _ATTENTION_MAX_SCORE
+            or bool(health["reused"])
+            or bool(health["stale"])
+        )
+
+    def _summary(
+        self,
+        entry: Entry,
+        catalog: Catalog | None = None,
+        health: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         catalog = catalog if catalog is not None else self._catalog()
+        mine = (health if health is not None else self._health())[entry.id]
         icons = brand_icons()
         recognized = catalog.match(entry.service)
         if entry.icon == "none":
@@ -362,6 +382,10 @@ class Api:
             "icon_url": icon_url(slug),
             "icon_color": icons[slug]["hex"] or None if slug else None,
             "service_key": recognized.key if recognized is not None else None,
+            "reused": mine["reused"],
+            "reused_count": mine["reused_count"],
+            "stale": mine["stale"],
+            "favorite": bool(entry.favorite),
         }
 
     def _find(self, entry_id: Any) -> Entry | None:
@@ -595,32 +619,31 @@ class Api:
                 return _error("invalid_category", "Categoria inválida.")
             everything = vault.entries
             known = {c.id for c in vault.categories}
+            health = self._health()
             stats = {
                 "total": len(everything),
                 "with_2fa": sum(1 for e in everything if e.has_2fa),
-                "attention": sum(
-                    1 for e in everything
-                    if password_strength(e.password)["score"] <= _ATTENTION_MAX_SCORE
-                ),
+                "attention": sum(1 for e in everything if self._needs_attention(e, health[e.id])),
                 "uncategorized": sum(1 for e in everything if e.category_id not in known),
+                "reused": sum(1 for e in everything if health[e.id]["reused"]),
+                "stale": sum(1 for e in everything if health[e.id]["stale"]),
             }
             found = vault.search(query if isinstance(query, str) else "")
             if category == "none":
                 found = [e for e in found if e.category_id not in known]
             elif category:
                 found = [e for e in found if e.category_id == category]
-            if filter == "2fa":
+            if filter == "favorites":
+                found = [e for e in found if e.favorite]
+            elif filter == "2fa":
                 found = [e for e in found if e.has_2fa]
             elif filter == "attention":
-                found = [
-                    e for e in found
-                    if password_strength(e.password)["score"] <= _ATTENTION_MAX_SCORE
-                ]
-            found.sort(key=lambda e: e.service.casefold())
+                found = [e for e in found if self._needs_attention(e, health[e.id])]
+            found.sort(key=lambda e: (not e.favorite, e.service.casefold()))
             catalog = self._catalog()
             return {
                 "ok": True,
-                "entries": [self._summary(e, catalog) for e in found],
+                "entries": [self._summary(e, catalog, health) for e in found],
                 "stats": stats,
             }
 
@@ -633,7 +656,30 @@ class Api:
             entry = self._find(id)
             if entry is None:
                 return _not_found()
-            return {"ok": True, "entry": self._summary(entry)}
+            health = self._health()
+            summary = self._summary(entry, None, health)
+            by_id = {e.id: e.service for e in self._vault.entries}  # type: ignore[union-attr]
+            summary["reused_with"] = [
+                {"id": other, "service": by_id[other]} for other in health[entry.id]["reused_with"]
+            ]
+            return {"ok": True, "entry": summary}
+
+    def toggle_favorite(self, id: str) -> dict[str, Any]:
+        """Marca ou desmarca uma conta como favorita."""
+        with self._lock:
+            err = self._require()
+            if err:
+                return err
+            assert self._vault is not None
+            try:
+                favorite = self._vault.toggle_favorite(id) if isinstance(id, str) else None
+            except KeyError:
+                return _not_found()
+            except OSError:
+                return _error("save_failed", "Não foi possível salvar o cofre.")
+            if favorite is None:
+                return _not_found()
+            return {"ok": True, "favorite": favorite}
 
     def reveal_password(self, id: str) -> dict[str, Any]:
         """Devolve a senha de uma conta."""
@@ -1215,6 +1261,35 @@ class Api:
             except OSError:
                 return _error("save_failed", "Não foi possível salvar o cofre.")
             return {"ok": True}
+
+    # ---- backups ----
+    def list_backups(self) -> dict[str, Any]:
+        """Lista os backups do cofre (do mais novo ao mais antigo), sem abrir nenhum."""
+        with self._lock:
+            err = self._require()
+            if err:
+                return err
+            assert self._vault is not None
+            return {"ok": True, "backups": self._vault.list_backups()}
+
+    def restore_backup(self, id: str, password: str) -> dict[str, Any]:
+        """Restaura um backup (o estado atual vira um backup antes). Exige a senha mestra."""
+        with self._lock:
+            err = self._require()
+            if err:
+                return err
+            assert self._vault is not None
+            try:
+                count = self._vault.restore_backup(id, password if isinstance(password, str) else "")
+            except WrongPasswordError:
+                return _error("wrong_password", "Senha mestra incorreta.")
+            except FileNotFoundError:
+                return _error("not_found", "Backup não encontrado.")
+            except VaultCorruptedError:
+                return _error("corrupted", "Este backup está corrompido ou é de outro cofre.")
+            except OSError:
+                return _error("save_failed", "Não foi possível restaurar o backup.")
+            return {"ok": True, "entries": count}
 
     def shutdown(self) -> dict[str, Any]:
         """Encerra: limpa a área de transferência (se for nossa) e bloqueia."""
