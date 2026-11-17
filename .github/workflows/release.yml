@@ -24,7 +24,7 @@ jobs:
       - name: Gerar executável
         run: >
           pyinstaller --noconfirm --onefile --windowed --name OwLock
-          --icon packaging/owlock.ico --add-data "owlock/web;owlock/web" --add-data "owlock/app/owlock.ico;owlock/app" --add-data "owlock/core/data;owlock/core/data" --collect-all webview --paths .
+          --icon packaging/owlock.ico --add-data "owlock/web;owlock/web" --add-data "owlock/app/owlock.ico;owlock/app" --add-data "owlock/core/data;owlock/core/data" --collect-all webview --collect-submodules keyring --paths .
           packaging/run_owlock.py
       - name: Anexar à release
         env:

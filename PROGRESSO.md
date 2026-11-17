@@ -331,3 +331,101 @@ open_url(id): se a conta não tem url, usa o login_url do serviço reconhecido (
   domínio, selo "Personalizado" ou "Alterado"), toque abre editor: embutido = editar link + "Restaurar link padrão";
   personalizado = nome, apelidos (separados por vírgula), link, ícone (Automático/Letra/grade) + Excluir (vermelho, confirmação).
   Botão "Adicionar serviço".
+
+## Fase 6 — v0.5: cofre v2 com Chave Secreta
+
+### Objetivo e modelo de ameaça
+Proteger o cofre quando o ARQUIVO sai do computador (nuvem, pendrive, backup vazado): sem a Chave Secreta, que fica
+guardada no aparelho (Gerenciador de Credenciais do Windows / Keychain / Secret Service), não dá nem para tentar adivinhar a
+senha mestra por força bruta. Não protege contra malware no próprio computador (fora do escopo, documentado no SECURITY.md).
+
+### Chave Secreta
+- 130 bits aleatórios (`secrets.token_bytes`), codificados em base32 RFC 4648 (A-Z, 2-7) → 26 caracteres de corpo
+  + 2 caracteres de verificação (os 2 primeiros caracteres base32 de SHA-256(corpo ASCII)).
+- Exibição: `OW2-XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX-XX` (corpo em grupos 5-5-5-5-6, verificação no fim).
+- `parse_secret_key(text)`: aceita minúsculas, espaços e hífens, prefixo opcional `OW2`; troca `0→O`, `1→I`, `8→B`;
+  valida tamanho e verificação → `InvalidSecretKeyError("Chave Secreta inválida: confira os caracteres.")`. Devolve os 16+ bytes do corpo
+  decodificado (base32 de 26 caracteres → use o padding correto; guarde os 130 bits como bytes do decode).
+- `secret_key_id(secret_bytes, vault_id)` = HMAC-SHA256(chave=secret_bytes, msg=b"owlock-v2-key-id|"+vault_id)[:8] em hex — fica no cabeçalho
+  para diferenciar "Chave Secreta errada" de "senha errada".
+
+### Derivação (owlock/core/crypto.py)
+```
+pw  = Argon2id(senha, salt, time_cost, memory_cost, parallelism) → 32 bytes   (como hoje)
+sk  = HKDF-SHA256(ikm=secret_bytes, salt=vault_id_bytes, info=b"owlock-v2 secret key", length=32)
+KEK = HKDF-SHA256(ikm=pw || sk,     salt=salt,           info=b"owlock-v2 kek",        length=32)
+```
+(HKDF de `cryptography.hazmat.primitives.kdf.hkdf`.) Chave do cofre (vault key) = 32 bytes aleatórios, criada uma vez.
+
+### Arquivo v2 (JSON)
+```json
+{
+  "format": "owlock-vault", "version": 2, "vault_id": "<uuid4 hex>",
+  "kdf": {"name": "argon2id", "salt": "<b64>", "time_cost": 3, "memory_cost": 65536, "parallelism": 4},
+  "secret_key": {"id": "<16 hex>"},
+  "cipher": {"name": "aes-256-gcm"},
+  "key":     {"nonce": "<b64>", "ciphertext": "<b64>"},
+  "meta":    {"nonce": "<b64>", "ciphertext": "<b64>"},
+  "entries": [{"id": "<uuid hex>", "nonce": "<b64>", "ciphertext": "<b64>"}]
+}
+```
+- `key` = AES-GCM(KEK, vault_key), AAD = JSON canônico (sort_keys, separators compactos) de
+  {format, version, vault_id, kdf, secret_key, cipher}. Trocar a senha muda salt → só `key` é refeito.
+- `meta` = AES-GCM(vault_key, JSON {"categories", "settings", "services"}), AAD = b"owlock-v2|" + vault_id + b"|meta".
+- cada entrada = AES-GCM(vault_key, JSON Entry.to_dict()), AAD = b"owlock-v2|" + vault_id + b"|entry|" + id;
+  o id dentro do JSON decifrado tem de ser igual ao id externo (senão corrompido). Ids externos não podem repetir.
+- Nonce novo para tudo que for cifrado em cada save (simples e seguro; otimização fica para depois).
+- Mesmas proteções de hoje: limites dos parâmetros kdf antes de derivar, escrita atômica, `.bak`, chmod 600, rollback em memória.
+- Revela no arquivo só a QUANTIDADE de contas (ids aleatórios) — documentar no SECURITY.md.
+
+### Guarda da Chave Secreta (owlock/core/keystore.py)
+- Interface `SecretKeyStore`: `get(vault_id) -> bytes|None`, `set(vault_id, secret_bytes)`, `delete(vault_id)`, `description -> str`.
+- `KeyringStore` (dependência nova `keyring>=25`): serviço "OwLock", usuário = vault_id, valor = Chave formatada.
+  Se o keyring não tiver backend utilizável (ex.: `keyring.backends.fail.Keyring`, ou exceção), cai para
+- `FileStore`: `~/.owlock/keys/<vault_id>.key`, permissão 600, escrita atômica. description em português
+  ("Gerenciador de Credenciais do Windows", "Chaveiro do sistema", "arquivo protegido na sua pasta de usuário").
+- `MemoryStore` para testes. `default_store()` escolhe Keyring ou File.
+
+### Vault (API do núcleo)
+- `Vault.create(path, password, store, kdf_params=None)` → cria v2 com Chave Secreta nova (guarda no store ANTES de gravar o arquivo);
+  `vault.secret_key_formatted` disponível logo após criar/migrar (para o Kit), depois só via `reveal_secret_key(password)`.
+- `Vault.open(path, password, store, secret_key: str|None = None)`:
+  v2: Chave = parse(secret_key) se informada, senão store.get(vault_id); nenhuma → `SecretKeyRequiredError`;
+  id não confere → `WrongSecretKeyError`; InvalidTag na `key` → `WrongPasswordError`; InvalidTag em meta/entrada → `VaultCorruptedError`.
+  Se a chave veio informada e funcionou → store.set.
+  v1: abre com o código atual (mantido como `_open_v1`) e MIGRA: gera Chave e vault key, `store.set` primeiro, copia o arquivo
+  original para `<arquivo>.v1-backup` (shutil.copy2, sem sobrescrever se já existir: acrescente sufixo numérico), grava v2 atômico.
+  Se store.set ou a gravação falhar → nada muda no arquivo original, erro `MigrationError`. Depois da migração `vault.migrated = True`
+  e `vault.v1_backup_path` aponta para a cópia.
+- `peek(path) -> {version, vault_id, secret_key_id}` (lê só o cabeçalho, sem senha; v1 devolve version 1).
+- `change_master_password(current, new)`: novo salt, nova KEK, só refaz `key`; após salvar, sobrescreve o `.bak` com o arquivo novo
+  (o backup não pode continuar abrindo com a senha antiga).
+- `reveal_secret_key(password) -> str`: confere a senha (deriva e compara a KEK com compare_digest) e devolve a Chave formatada.
+- Todo o resto (entradas, categorias, ajustes, serviços, histórico) igual por fora.
+
+### Api
+```
+status() ganha: app_version, format_version (1|2|null), secret_key_required (bool: v2 e store sem a chave), key_storage (descrição)
+unlock(password, secret_key=None) → ok + {migrated: bool, v1_backup_path?} | wrong_password | wrong_secret_key | secret_key_required
+                                      | invalid_secret_key | migration_failed | corrupted | not_found
+create_vault(password, confirm) → ok + {secret_key: "<formatada>"}  (só nesta resposta, para mostrar o Kit)
+emergency_kit(password) → {ok, secret_key, vault_id, vault_path, key_storage} | wrong_password      (exige cofre aberto)
+save_emergency_kit(password) → {ok, path} | wrong_password | cancelled | save_failed
+    abre diálogo "Salvar como" (callable injetável `save_dialog(default_name) -> str|None`; no app real usa
+    window.create_file_dialog(webview.SAVE_DIALOG)) e grava um HTML autossuficiente para imprimir (sem recursos externos,
+    valores com html.escape): logo em texto, título "Kit de emergência do OwLock", data, Chave Secreta em fonte mono grande,
+    campo em branco "Senha mestra: ______" para preencher à mão, caminho do cofre, instruções de recuperação e aviso para
+    guardar em local seguro e nunca enviar por mensagem.
+delete_v1_backup() → {ok} | not_found       (apaga só o caminho registrado na migração desta sessão)
+```
+- `app_version` vem de `owlock.__version__` = "0.5.0" (atualize também pyproject.toml).
+
+### Interface
+- Desbloqueio: se `secret_key_required`, mostra também o campo "Chave Secreta" (placeholder OW2-…, aceita colar),
+  com explicação curta: "Este cofre foi criado em outro computador. Digite a Chave Secreta do seu Kit de emergência."
+- Criação: depois de criar, tela "Seu Kit de emergência" (obrigatória de passar): mostra a Chave, botões "Salvar Kit" e
+  "Copiar chave", e a confirmação "Guardei meu Kit em local seguro" (interruptor) que libera o botão "Continuar".
+- Migração: mesma tela, com o texto "Seu cofre foi atualizado para o formato v2" e, abaixo, a cópia do cofre antigo com o botão
+  "Apagar cópia antiga" (confirmação; avisa que ela ainda abre só com a senha).
+- Ajustes > "Chave Secreta e Kit de emergência": onde a chave está guardada (key_storage), botão "Ver Kit de emergência"
+  (pede a senha mestra num sheet) e "Salvar Kit". Versão do app no rodapé dos Ajustes.

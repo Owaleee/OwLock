@@ -84,53 +84,56 @@ owlock --vault CAMINHO/do/meu-cofre.vault
 
 ## Segurança
 
-O OwLock foi projetado para que o conteúdo do arquivo do cofre só possa ser lido com a senha mestra.
+Para abrir o cofre são necessárias **duas coisas**: a **senha mestra** e a **Chave Secreta**, uma chave aleatória de 130 bits guardada no seu computador (Gerenciador de Credenciais do Windows). O modelo de ameaças completo está no [SECURITY.md](SECURITY.md).
 
-- **Derivação da chave:** a senha mestra é transformada em uma chave de 256 bits pelo algoritmo Argon2id, configurado com 3 iterações, 64 MiB de memória e paralelismo 4. Cada cofre usa um salt aleatório de 16 bytes. Esse processo torna ataques de força bruta muito mais caros.
-- **Cifragem:** o conteúdo inteiro do cofre é cifrado com AES-256-GCM. Um nonce novo é gerado a cada gravação.
-- **Integridade:** o cabeçalho do arquivo (parâmetros de derivação e algoritmos) é usado como dado autenticado. Se alguém alterar esses parâmetros no arquivo, a abertura falha.
-- **Sem rede:** o OwLock não envia nem recebe dados. Tudo acontece localmente.
-- **Cofre em bloco único:** como o arquivo é cifrado inteiro, ele não revela quantas contas existem nem os nomes dos serviços.
+- **Derivação:** a senha mestra passa pelo Argon2id (3 iterações, 64 MiB, paralelismo 4, salt aleatório de 16 bytes) e é combinada com a Chave Secreta via HKDF-SHA256. O resultado tranca a chave do cofre.
+- **Cifragem:** AES-256-GCM. Os metadados e cada conta são cifrados separadamente, ligados ao identificador do cofre e da conta; o cabeçalho é autenticado.
+- **Arquivo vazado não basta:** sem a Chave Secreta não dá nem para começar a adivinhar a senha mestra.
+- **Kit de emergência:** a Chave Secreta é mostrada na criação do cofre, com uma página para salvar e imprimir. Ela é necessária para abrir o cofre em outro computador.
+- **Troca de senha instantânea:** só a "tranca" da chave do cofre é refeita, e o `.bak` é atualizado para não abrir com a senha antiga.
+- **Sem rede:** o OwLock não envia nem recebe dados.
 
 ### Interface
 
 A interface roda numa janela do pywebview, e estas regras protegem os dados que ela exibe:
 
 - **Senhas fora da listagem:** a lista de contas nunca recebe senhas. A senha só chega à interface ao clicar em **Mostrar** (`reveal_password`) ou no formulário de edição.
-- **Cópia pelo Python:** a cópia é feita pelo Python (`copy_field`), que limpa a área de transferência após 30 segundos, somente se ela ainda contiver o texto copiado.
+- **Cópia pelo Python:** a cópia é feita pelo Python, que limpa a área de transferência após o prazo escolhido (30 segundos por padrão), somente se ela ainda contiver o texto copiado.
 - **Sem `innerHTML` com dados:** textos do usuário são sempre gravados com `textContent`, o que evita XSS, já que um ataque desse tipo daria acesso ao cofre.
 - **Content-Security-Policy restrita:** a política permite apenas recursos locais (`default-src 'self'`), fontes locais e nenhuma requisição para a internet. Scripts inline continuam proibidos. A exceção é `'unsafe-eval'` em `script-src`, exigida pelo pywebview, que cria as funções da ponte (`window.pywebview.api`) com `new Function`; por isso a defesa contra XSS depende de não usar `innerHTML` com dados.
-- **Bloqueio feito no Python:** a Api bloqueia o cofre sozinha após 5 minutos sem atividade. A interface apenas mostra a contagem.
+- **Bloqueio feito no Python:** a Api bloqueia o cofre sozinha após o tempo escolhido sem atividade (5 minutos por padrão). A interface apenas mostra a contagem.
 
 ### Limitações
 
 Este é um projeto pessoal e precisa ser usado com consciência dessas limitações:
 
-- **A senha mestra não pode ser recuperada.** Se você a esquecer, os dados do cofre são perdidos.
+- **Não existe recuperação.** Sem a senha mestra ou sem a Chave Secreta (guarde o Kit de emergência), os dados do cofre são perdidos.
 - **Computador comprometido:** se o sistema estiver infectado por keylogger ou malware, nenhum gerenciador local oferece proteção suficiente.
 - **Dados na memória:** enquanto o cofre estiver desbloqueado, os dados ficam na memória do processo.
-- **Arquivo `.bak`:** é a versão anterior do cofre, também cifrada. Depois de trocar a senha mestra, o `.bak` continua abrindo com a senha antiga até o próximo salvamento.
+- **Metadados:** o arquivo revela a quantidade de contas, mas não os nomes, logins, senhas, categorias ou links.
 - **Sem auditoria independente:** o código não passou por auditoria de segurança externa. Para uso crítico, considere também soluções auditadas, como [Bitwarden](https://bitwarden.com/) ou [KeePassXC](https://keepassxc.org/).
 
 ### Recomendação
 
-Faça cópias do arquivo `.vault` em outro local, como um pendrive ou um serviço de nuvem. Ele está cifrado, então pode ser guardado com segurança fora do computador.
+Faça cópias do arquivo `.vault` em outro local, como um pendrive ou um serviço de nuvem: sem a Chave Secreta ele não pode ser atacado. Guarde o Kit de emergência separado do arquivo.
 
 ## Formato do arquivo
 
-O cofre é salvo em JSON, com número de versão. A estrutura é esta:
+O cofre é um JSON versionado (formato v2; cofres v1 são convertidos automaticamente na primeira abertura, com cópia `.v1-backup`):
 
 ```json
 {
-  "format": "owlock-vault",
-  "version": 1,
+  "format": "owlock-vault", "version": 2, "vault_id": "<uuid>",
   "kdf": {"name": "argon2id", "salt": "<b64>", "time_cost": 3, "memory_cost": 65536, "parallelism": 4},
-  "cipher": {"name": "aes-256-gcm", "nonce": "<b64 12 bytes>"},
-  "ciphertext": "<b64>"
+  "secret_key": {"id": "<16 hex>"},
+  "cipher": {"name": "aes-256-gcm"},
+  "key":     {"nonce": "<b64>", "ciphertext": "<b64>"},
+  "meta":    {"nonce": "<b64>", "ciphertext": "<b64>"},
+  "entries": [{"id": "<uuid>", "nonce": "<b64>", "ciphertext": "<b64>"}]
 }
 ```
 
-O formato é versionado de propósito, para permitir que um aplicativo de celular leia o mesmo arquivo no futuro.
+`key` é a chave do cofre trancada pela senha mestra + Chave Secreta; `meta` guarda categorias, ajustes e serviços personalizados; cada item de `entries` é uma conta cifrada separadamente, o que prepara a sincronização com o celular.
 
 ## Arquitetura
 
@@ -142,7 +145,9 @@ owlock/
     models.py      # Entry, Category (dataclasses), cores e ícones das categorias
     catalog.py     # biblioteca de serviços: links de login, apelidos e ícones
     data/          # services.json (67 serviços) e brand_icons.json
-    crypto.py      # derivação de chave (Argon2id) + AES-256-GCM
+    crypto.py      # Argon2id, HKDF e AES-256-GCM
+    secret_key.py  # Chave Secreta: geração, formato OW2-…, verificação
+    keystore.py    # onde a Chave Secreta fica guardada (chaveiro do sistema ou arquivo protegido)
     vault.py       # Vault: criar, abrir, CRUD, salvar (escrita atômica), trocar senha mestra
     generator.py   # gerador de senhas com `secrets`
     errors.py      # WrongPasswordError, VaultCorruptedError, VaultExistsError
@@ -208,7 +213,6 @@ O arquivo fica em `dist/`. Para publicar uma nova versão, crie uma release no G
 
 Versões entregues e próximos passos estão no [ROADMAP.md](ROADMAP.md). Em resumo:
 
-- **v0.5:** cofre v2 com Chave Secreta e Kit de emergência.
 - **v0.6:** senhas repetidas e antigas, bloqueio ao minimizar, backups com histórico, favoritas.
 - **v0.7:** atalhos de teclado, importar/exportar CSV, códigos 2FA opcionais.
 - **v0.8:** extensão de navegador para preencher login e senha.

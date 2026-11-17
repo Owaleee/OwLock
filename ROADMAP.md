@@ -10,17 +10,9 @@ O OwLock é um gerenciador de senhas local, offline e de código aberto. Este do
 | **v0.2.0** | Interface nova (HTML/CSS/JS em janela nativa) com visual inspirado no iOS, LEDs de status e logo própria |
 | **v0.3.0** | Categorias, histórico de senhas, site da conta, tempos de bloqueio e de limpeza configuráveis |
 | **v0.4.0** | Biblioteca de links com 67 serviços, sugestões ao digitar, ícones das plataformas embutidos e serviços personalizados |
+| **v0.5.0** | Cofre v2 com Chave Secreta, chave do cofre separada, cada conta cifrada separadamente, Kit de emergência, migração automática e SECURITY.md |
 
 ## Próximas versões
-
-### v0.5 — Segurança do cofre (formato v2)
-Base para a sincronização com o celular.
-- **Chave Secreta:** para abrir o cofre é preciso a senha mestra **e** uma chave aleatória guardada no aparelho. Um arquivo vazado não pode ser atacado por força bruta.
-- **Chave do cofre separada da senha mestra:** trocar a senha mestra só recifra uma chave, sem tocar nos dados.
-- **Cada conta cifrada separadamente:** permite juntar edições feitas em aparelhos diferentes.
-- **Kit de emergência:** página para imprimir ou guardar com a Chave Secreta e as instruções de recuperação.
-- **Migração automática** dos cofres v1, com cópia de segurança do arquivo antigo.
-- **`SECURITY.md`:** modelo de ameaças, do que o app protege e do que não protege.
 
 ### v0.6 — Saúde das senhas e proteção
 - Aviso de **senhas repetidas** em mais de uma conta (no filtro "Atenção").
