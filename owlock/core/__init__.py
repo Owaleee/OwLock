@@ -11,6 +11,7 @@ from .errors import (
     WrongSecretKeyError,
 )
 from .generator import generate_password
+from .health import password_health
 from .models import (
     AUTO_LOCK_OPTIONS,
     CATEGORY_COLORS,
@@ -56,4 +57,5 @@ __all__ = [
     "VaultExistsError",
     "WrongPasswordError",
     "generate_password",
+    "password_health",
 ]

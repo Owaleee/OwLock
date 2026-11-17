@@ -11,6 +11,7 @@ import inspect
 import tempfile
 import json
 import mimetypes
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -150,14 +151,18 @@ def make_server(api: Api, port: int = 8765, web_dir: Path | None = None) -> Thre
 def seed_vault(path: Path, store: FileStore | None = None) -> None:
     """Cria um cofre de teste com contas de exemplo."""
     vault = Vault.create(path, SEED_PASSWORD, store if store is not None else dev_store(path))
+    now = datetime.now(timezone.utc)
+    when = {"t": now - timedelta(days=3)}
+    vault.clock = lambda: when["t"]  # relógio do cofre: faz os backups de exemplo terem datas diferentes
     cats = {c.name: c.id for c in vault.categories}
     samples = [
-        Entry("Google", "seu.email@gmail.com", "Gx4!nP8s#Qd1vL2@", True, "Google Authenticator", "Conta principal", cats["Pessoal"], url="https://accounts.google.com"),
+        Entry("Google", "seu.email@gmail.com", "Gx4!nP8s#Qd1vL2@", True, "Google Authenticator", "Conta principal", cats["Pessoal"], url="https://accounts.google.com", favorite=True),
         Entry("Steam", "seu_usuario_steam", "T7#qLm9!vRz2@kWp", True, "Steam Guard", "", cats["Jogos"], url="https://store.steampowered.com"),
-        Entry("GitHub", "seu-usuario", "Hk3$wTz9&pLq5!mB", True, "Authy", "Chave de acesso do trabalho", cats["Trabalho"], url="https://github.com"),
+        Entry("GitHub", "seu-usuario", "Hk3$wTz9&pLq5!mB", True, "Authy", "Chave de acesso do trabalho", cats["Trabalho"], url="https://github.com", favorite=True),
         Entry("Discord", "seu.email@gmail.com", "discord2021", False, "", "Trocar esta senha", cats["Jogos"], url="https://discord.com"),
-        Entry("Netflix", "seu.email@gmail.com", "Nf!93kdPq", False, category_id=cats["Streaming"]),  # sem site: mostra o link da biblioteca
-        Entry("Epic Games", "seu.email@gmail.com", "Zr8@cVn4#Yt6mJ1x", True, "Epic Authenticator", "", cats["Jogos"], url="https://store.epicgames.com", icon="none"),  # letra no lugar do ícone
+        Entry("Netflix", "seu.email@gmail.com", "T7#qLm9!vRz2@kWp", False, category_id=cats["Streaming"]),  # mesma senha da Steam (repetida); sem site: mostra o link da biblioteca
+        Entry("Epic Games", "seu.email@gmail.com", "Zr8@cVn4#Yt6mJ1x", True, "Epic Authenticator", "", cats["Jogos"], url="https://store.epicgames.com", icon="none",  # letra no lugar do ícone
+              created_at=(now - timedelta(days=730)).isoformat(timespec="seconds")),  # sem troca há 2 anos: aparece como antiga
     ]
     # Serviço personalizado na biblioteca de links.
     vault.update_services(
@@ -184,6 +189,11 @@ def seed_vault(path: Path, store: FileStore | None = None) -> None:
         vault.add(entry)
         for password in (*olds[1:], final):
             vault.update(dataclasses.replace(entry, password=password))
+    # Backups de exemplo: o primeiro nasce sozinho no primeiro salvamento (cofre vazio, há 3 dias);
+    # o segundo, com todas as contas, há 1 dia.
+    when["t"] = now - timedelta(days=1)
+    vault.create_backup()
+    vault.clock = lambda: datetime.now(timezone.utc)
 
 
 def main(argv: list[str] | None = None) -> None:

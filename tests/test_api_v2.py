@@ -66,7 +66,7 @@ def test_status_no_vault(path, store):
     s = make_api(path, store).status()
     assert s["exists"] is False and s["format_version"] is None
     assert s["secret_key_required"] is False
-    assert s["app_version"] == __version__ == "0.5.0"
+    assert s["app_version"] == __version__
     assert s["key_storage"] == store.description
 
 

@@ -178,7 +178,7 @@ def test_filters_and_stats(opened):
     ra = opened.list_entries(filter="attention")
     assert [e["service"] for e in ra["entries"]] == ["beta", "zeta"]
     assert ra["stats"] == {"total": 4, "with_2fa": 2, "attention": 2,
-                        "uncategorized": 4}
+                        "uncategorized": 4, "reused": 0, "stale": 0}
     err(opened.list_entries(filter="xyz"), "invalid_filter")
 
 
@@ -418,6 +418,8 @@ def test_public_surface(api):
         "reveal_history_password", "copy_history_password", "open_url",
         "lookup_service", "list_services", "save_service", "reset_service",
         "delete_service", "brand_icons", "emergency_kit", "save_emergency_kit", "delete_v1_backup",
+        "toggle_favorite", "list_backups", "restore_backup",
+        "get_desktop_config", "save_desktop_config", "quick_hide", "quick_open_main", "generate_and_copy",
     }
 
 

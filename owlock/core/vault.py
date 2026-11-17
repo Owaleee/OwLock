@@ -12,9 +12,9 @@ import secrets
 import shutil
 import unicodedata
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from cryptography.exceptions import InvalidTag
 
@@ -45,6 +45,12 @@ FORMAT_VERSION = 2
 LEGACY_VERSION = 1
 KDF_NAME = "argon2id"
 CIPHER_NAME = "aes-256-gcm"
+
+# Backups com histórico: <cofre>.backups/AAAAMMDD-HHMMSS[-N].vault (UTC)
+BACKUP_LIMIT = 20
+BACKUP_INTERVAL = timedelta(hours=1)
+_BACKUP_ID_RE = re.compile(r"^\d{8}-\d{6}(-\d+)?$", re.ASCII)
+_BACKUP_TIME_FORMAT = "%Y%m%d-%H%M%S"
 
 _VAULT_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _KEY_ID_RE = re.compile(r"^[0-9a-f]{16}$")
@@ -352,6 +358,83 @@ def _persist_secret(store: SecretKeyStore, vault_id: str, secret: bytes) -> None
         raise OSError("Não foi possível guardar a Chave Secreta neste aparelho.") from exc
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _valid_backup_id(value: Any) -> bool:
+    """Só aceita o formato exato AAAAMMDD-HHMMSS[-N] (nada de caminhos)."""
+    return isinstance(value, str) and _BACKUP_ID_RE.fullmatch(value) is not None
+
+
+def _backup_sort_key(backup_id: str) -> tuple[str, int]:
+    return backup_id[:15], int(backup_id[16:] or 1)
+
+
+def _backup_time(backup_id: str) -> datetime | None:
+    try:
+        return datetime.strptime(backup_id[:15], _BACKUP_TIME_FORMAT).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _atomic_write(path: Path, data: bytes) -> None:
+    """Grava `data` em `path` de forma atômica (arquivo temporário vizinho + os.replace), modo 600."""
+    tmp = path.with_name("." + path.name + ".tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _decode_v2_body(
+    doc: dict[str, Any], vault_id: str, vault_key: bytes
+) -> tuple[list[Entry], list[Category], Settings, dict[str, Any]]:
+    """Decifra por inteiro (meta e todas as entradas) um documento v2 com a chave do cofre."""
+    meta_nonce, meta_ct = _blob(doc, "meta")
+    raw_entries = doc.get("entries")
+    if not isinstance(raw_entries, list):
+        raise VaultCorruptedError("Arquivo do cofre incompleto.")
+    try:
+        meta = json.loads(crypto.decrypt(vault_key, meta_nonce, meta_ct, _meta_aad(vault_id)).decode("utf-8"))
+        if not isinstance(meta, dict):
+            raise ValueError("meta")
+        categories, settings, services = _parse_meta_blocks(meta)
+        entries: list[Entry] = []
+        seen: set[str] = set()
+        for item in raw_entries:
+            if not isinstance(item, dict):
+                raise VaultCorruptedError("Arquivo do cofre inválido.")
+            entry_id = item.get("id")
+            if not isinstance(entry_id, str) or not 0 < len(entry_id) <= _MAX_ENTRY_ID or entry_id in seen:
+                raise VaultCorruptedError("Arquivo do cofre inválido.")
+            seen.add(entry_id)
+            nonce, ciphertext = _blob({"x": item}, "x")
+            plain = crypto.decrypt(vault_key, nonce, ciphertext, _entry_aad(vault_id, entry_id))
+            entry = Entry.from_dict(json.loads(plain.decode("utf-8")))
+            if entry.id != entry_id:
+                raise VaultCorruptedError("Conteúdo do cofre corrompido (id divergente).")
+            entries.append(entry)
+    except InvalidTag as exc:
+        raise VaultCorruptedError("Conteúdo do cofre corrompido.") from exc
+    except (UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
+        raise VaultCorruptedError("Conteúdo do cofre corrompido.") from exc
+    return entries, categories, settings, services
+
+
 class Vault:
     """Cofre de senhas em memória, ligado a um arquivo cifrado (formato v2)."""
 
@@ -377,6 +460,10 @@ class Vault:
         self.migrated = False
         self.v1_backup_path: Path | None = None
         self.secret_key_persisted = True
+        # relógio dos backups (datetime com fuso UTC); trocável nos testes
+        self.clock: Callable[[], datetime] = _utcnow
+        # resultado da última atualização de backups numa troca de senha: {"updated": [...], "skipped": [...]}
+        self.backup_report: dict[str, list[str]] = {"updated": [], "skipped": []}
         self._vault_id = vault_id
         self._vault_key = vault_key
         self._kek = kek
@@ -640,6 +727,10 @@ class Vault:
             vault._refresh_bak()
         except OSError:
             pass
+        try:
+            vault._snapshot()  # sempre um snapshot depois de migrar
+        except OSError:
+            pass
         return vault
 
     @staticmethod
@@ -708,8 +799,13 @@ class Vault:
             pass
 
     def save(self) -> None:
-        """Cifra e grava o cofre de forma atômica, mantendo um .bak."""
-        self._write(self._serialize())
+        """Cifra e grava o cofre de forma atômica, mantendo um .bak.
+
+        Antes de gravar, cria um snapshot do arquivo atual se o último tiver mais de 1 hora.
+        """
+        data = self._serialize()
+        self._maybe_snapshot()
+        self._write(data)
 
     def _refresh_bak(self) -> None:
         """Sobrescreve o .bak com o arquivo atual (o .bak não pode guardar estado antigo).
@@ -901,7 +997,8 @@ class Vault:
     def change_master_password(self, current: str, new: str) -> None:
         """Troca a senha mestra (novo salt, nova KEK; só `key` é refeito) e salva.
 
-        Depois de salvar, o .bak é sobrescrito com o arquivo novo (não abre com a senha antiga).
+        Depois de salvar, o .bak é sobrescrito com o arquivo novo (não abre com a senha antiga)
+        e todos os snapshots válidos de backup passam para a nova senha (ver `backup_report`).
         """
         self._check_current(current)
         _check_master(new)
@@ -915,8 +1012,201 @@ class Vault:
             self._kek, self._salt = old_kek, old_salt
             raise
         self._refresh_bak()
+        self._update_snapshots()
 
     def reveal_secret_key(self, password: str) -> str:
         """Confere a senha mestra e devolve a Chave Secreta formatada."""
         self._check_current(password)
         return format_secret_key(self._secret)
+
+    # ---- favoritas ----
+    def toggle_favorite(self, entry_id: str) -> bool:
+        """Alterna a marca de favorita (sem mexer em updated_at), salva e devolve o novo valor."""
+        entry = self.entries[self._index(entry_id)]
+        entry.favorite = not entry.favorite
+        try:
+            self.save()
+        except BaseException:
+            entry.favorite = not entry.favorite
+            raise
+        return entry.favorite
+
+    # ---- backups com histórico ----
+    @property
+    def backups_dir(self) -> Path:
+        return self.path.with_name(self.path.name + ".backups")
+
+    def _backup_now(self) -> datetime:
+        now = self.clock()
+        return now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now.astimezone(timezone.utc)
+
+    def _backup_ids(self) -> list[str]:
+        """Ids (nome válido, arquivo comum) dos snapshots existentes, do mais antigo ao mais novo."""
+        folder = self.backups_dir
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            return []
+        ids = []
+        for name in names:
+            stem = name[:-6]
+            if not name.endswith(".vault") or not _valid_backup_id(stem):
+                continue
+            full = folder / name
+            if full.is_symlink() or not full.is_file():
+                continue
+            ids.append(stem)
+        return sorted(ids, key=_backup_sort_key)
+
+    def _snapshot(self) -> str:
+        """Copia o arquivo atual do cofre para um snapshot novo (pasta 700, arquivo 600) e poda."""
+        data = self.path.read_bytes()
+        folder = self.backups_dir
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            os.chmod(folder, 0o700)
+        except OSError:
+            pass
+        base = self._backup_now().strftime(_BACKUP_TIME_FORMAT)
+        existing = set(self._backup_ids())
+        snap_id, n = base, 1
+        while snap_id in existing or (folder / f"{snap_id}.vault").exists():
+            n += 1
+            snap_id = f"{base}-{n}"
+        _atomic_write(folder / f"{snap_id}.vault", data)
+        self._prune_backups()
+        return snap_id
+
+    def create_backup(self) -> str:
+        """Cria um snapshot agora (ignora a regra de 1 hora) e devolve o id. OSError em falha."""
+        return self._snapshot()
+
+    def _prune_backups(self) -> None:
+        ids = self._backup_ids()
+        for old in ids[: max(0, len(ids) - BACKUP_LIMIT)]:
+            try:
+                (self.backups_dir / f"{old}.vault").unlink()
+            except OSError:
+                pass
+
+    def _maybe_snapshot(self) -> None:
+        """Snapshot do arquivo atual se não houver nenhum com menos de 1 hora (best-effort)."""
+        if not self.path.exists():
+            return
+        try:
+            times = [t for t in (_backup_time(i) for i in self._backup_ids()) if t is not None]
+            if times and self._backup_now() - max(times) <= BACKUP_INTERVAL:
+                return
+            self._snapshot()
+        except OSError:
+            pass
+
+    def _read_snapshot(self, backup_id: Any) -> dict[str, Any]:
+        """Lê e confere o cabeçalho de um snapshot DESTE cofre.
+
+        FileNotFoundError: id inválido ou arquivo inexistente. VaultCorruptedError: inválido ou de outro cofre.
+        """
+        if not _valid_backup_id(backup_id):
+            raise FileNotFoundError("Backup não encontrado.")
+        file = self.backups_dir / f"{backup_id}.vault"
+        if file.is_symlink() or not file.is_file():
+            raise FileNotFoundError("Backup não encontrado.")
+        _, doc = _read_doc(file)
+        if _doc_version(doc) != FORMAT_VERSION:
+            raise VaultCorruptedError("Backup de formato não suportado.")
+        if _vault_id_of(doc) != self._vault_id:
+            raise VaultCorruptedError("Este backup é de outro cofre.")
+        expected = secret_key_id(self._secret, bytes.fromhex(self._vault_id))
+        if not hmac.compare_digest(_key_id_of(doc).encode("ascii"), expected.encode("ascii")):
+            raise VaultCorruptedError("Este backup é de outro cofre.")
+        kdf, cipher = doc.get("kdf"), doc.get("cipher")
+        if not isinstance(kdf, dict) or not isinstance(cipher, dict):
+            raise VaultCorruptedError("Backup incompleto.")
+        if kdf.get("name") != KDF_NAME or cipher.get("name") != CIPHER_NAME:
+            raise VaultCorruptedError("Backup com algoritmos não suportados.")
+        if _validate_kdf_params(kdf) != self._kdf:
+            raise VaultCorruptedError("Backup com parâmetros diferentes.")
+        return doc
+
+    def _rekeyed(self, doc: dict[str, Any]) -> bytes:
+        """O mesmo snapshot com o salt e o bloco `key` da senha mestra atual (o resto não muda)."""
+        key_id = _key_id_of(doc)
+        header = _v2_header(self._vault_id, self._salt, self._kdf, key_id)
+        nonce, ciphertext = crypto.encrypt(self._kek, self._vault_key, _canonical(header))
+        out = copy.deepcopy(doc)
+        out["kdf"]["salt"] = _b64e(self._salt)
+        out["key"] = {"nonce": _b64e(nonce), "ciphertext": _b64e(ciphertext)}
+        return json.dumps(out, indent=2).encode("utf-8")
+
+    def _update_snapshots(self) -> None:
+        """Passa todos os snapshots válidos deste cofre para a senha mestra atual."""
+        updated: list[str] = []
+        skipped: list[str] = []
+        for backup_id in self._backup_ids():
+            file = self.backups_dir / f"{backup_id}.vault"
+            try:
+                doc = self._read_snapshot(backup_id)
+                _decode_v2_body(doc, self._vault_id, self._vault_key)  # só atualiza o que é nosso e íntegro
+            except (OSError, VaultCorruptedError):
+                skipped.append(backup_id)
+                continue
+            try:
+                _atomic_write(file, self._rekeyed(doc))
+                updated.append(backup_id)
+            except OSError:
+                skipped.append(backup_id)
+                try:  # não pode sobrar um backup que abre com a senha antiga
+                    file.unlink()
+                except OSError:
+                    pass
+        self.backup_report = {"updated": updated, "skipped": skipped}
+
+    def list_backups(self) -> list[dict[str, Any]]:
+        """Snapshots deste cofre, do mais novo ao mais antigo: [{id, created_at, size, entries}].
+
+        Lê só o cabeçalho de cada arquivo (nada é decifrado); inválidos e de outros cofres ficam de fora.
+        """
+        out: list[dict[str, Any]] = []
+        for backup_id in reversed(self._backup_ids()):
+            moment = _backup_time(backup_id)
+            if moment is None:
+                continue
+            file = self.backups_dir / f"{backup_id}.vault"
+            try:
+                raw, doc = _read_doc(file)
+                if _doc_version(doc) != FORMAT_VERSION or _vault_id_of(doc) != self._vault_id:
+                    continue
+                entries = doc.get("entries")
+                if not isinstance(entries, list):
+                    continue
+            except (OSError, VaultCorruptedError):
+                continue
+            out.append(
+                {
+                    "id": backup_id,
+                    "created_at": moment.isoformat(timespec="seconds"),
+                    "size": len(raw),
+                    "entries": len(entries),
+                }
+            )
+        return out
+
+    def restore_backup(self, backup_id: str, password: str) -> int:
+        """Restaura um snapshot deste cofre. Devolve quantas contas o cofre tem depois.
+
+        Confere a senha mestra, valida o snapshot (mesmo cofre) e decifra tudo com a chave em memória
+        ANTES de tocar em qualquer arquivo; o estado atual vira um snapshot e o arquivo é trocado de forma
+        atômica (o .bak também é atualizado). Em qualquer falha nada muda.
+        Erros: WrongPasswordError, FileNotFoundError (id inválido/inexistente), VaultCorruptedError, OSError.
+        """
+        self._check_current(password)
+        doc = self._read_snapshot(backup_id)
+        entries, categories, settings, services = _decode_v2_body(doc, self._vault_id, self._vault_key)
+        data = self._rekeyed(doc)  # abre com a senha mestra de agora, mesmo que o snapshot fosse antigo
+        if self.path.exists():
+            self._snapshot()  # falha aqui aborta a restauração
+        self._write(data, keep_bak=False)
+        self.entries, self.categories = entries, categories
+        self.settings, self.services = settings, services
+        self._refresh_bak()
+        return len(self.entries)
