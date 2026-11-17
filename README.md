@@ -12,6 +12,21 @@ O OwLock guarda suas contas em um único arquivo criptografado, protegido por um
 
 **[Baixar a versão mais recente](https://github.com/Owaleee/OwLock/releases/latest)** · [Roadmap](ROADMAP.md)
 
+## Imagens
+
+<p align="center"><img src="docs/screenshots/01-cofre.jpg" width="820" alt="Tela principal do OwLock com a lista de contas e os detalhes da conta Steam"></p>
+
+| | |
+|---|---|
+| <img src="docs/screenshots/02-atencao.jpg" alt="Filtro Atenção mostrando uma senha fraca e repetida"> | <img src="docs/screenshots/05-importar.jpg" alt="Prévia da importação de um CSV do Bitwarden"> |
+| **Saúde das senhas:** fracas, repetidas e antigas no filtro Atenção | **Importar** do Chrome, Edge, Google, Bitwarden e Firefox |
+| <img src="docs/screenshots/06-nova-conta.jpg" alt="Formulário de nova conta com sugestões da biblioteca de serviços"> | <img src="docs/screenshots/04-gerador.jpg" alt="Gerador de senhas"> |
+| **Nova conta** com sugestões da biblioteca de 67 serviços | **Gerador** de senhas fortes |
+| <img src="docs/screenshots/03-categorias.jpg" alt="Tela de categorias"> | <img src="docs/screenshots/00-desbloqueio.jpg" alt="Tela de desbloqueio"> |
+| **Categorias** com cor e ícone | **Desbloqueio** com a senha mestra |
+
+<sub>Imagens feitas com um cofre de demonstração: as contas e os dados são fictícios.</sub>
+
 ## Funcionalidades
 
 - Cofre cifrado com senha mestra.
