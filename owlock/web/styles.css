@@ -519,6 +519,8 @@ body .cat-strip.dragging { scroll-snap-type: none; cursor: grabbing; }
 }
 .cat-tile.mint { --cat: var(--mint); }
 .cat-tile.blue { --cat: #6CB4FF; }
+.cat-tile.violet { --cat: #B69CFF; }
+.cat-tile.amber { --cat: #FFB347; }
 .empty-icon.cat-tile { width: 52px; height: 52px; border-radius: 14px; }
 .cat-row { width: 100%; text-align: left; }
 .cat-row:hover { background: rgba(255, 255, 255, .04); }
@@ -778,3 +780,14 @@ body.quick #toasts { top: 8px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* importar contas */
+.import-list { max-height: 240px; overflow-y: auto; border-radius: 12px; background: var(--fill); flex: none; }
+.import-row { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid rgba(255, 255, 255, .05); }
+.import-row:last-child { border-bottom: 0; }
+.import-row.is-dup { opacity: .6; }
+.import-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.import-service { font-size: 14px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.import-meta { font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kbd { font: 600 12px/1 ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--text-2); padding: 6px 8px; border-radius: 8px; background: var(--fill); white-space: nowrap; }
+.modal .switch-row .row-k.grow { white-space: normal; min-width: 0; }

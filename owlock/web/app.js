@@ -23,6 +23,7 @@ const ICONS = {
   check: [['path', { d: 'M5 12.5l4.5 4.5L19 7.5' }]],
   shieldKey: [['path', { d: 'M12 3l7.5 3v5.2c0 4.6-3.1 8.1-7.5 9.8-4.4-1.7-7.5-5.2-7.5-9.8V6L12 3z' }], ['circle', { cx: 12, cy: 10, r: 2 }], ['path', { d: 'M12 12v4M12 14.5h1.8' }]],
   download: [['path', { d: 'M12 4v11M7.5 11l4.5 4.5 4.5-4.5M5 20h14' }]],
+  upload: [['path', { d: 'M12 20V9M7.5 13l4.5-4.5 4.5 4.5M5 4h14' }]],
   link: [['path', { d: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1' }]],
   none: [['circle', { cx: 12, cy: 12, r: 8 }], ['path', { d: 'M6.3 17.7L17.7 6.3' }]],
   user: [['circle', { cx: 12, cy: 8, r: 4 }], ['path', { d: 'M4 21a8 8 0 0 1 16 0' }]],
@@ -315,6 +316,44 @@ document.addEventListener('keydown', (event) => {
   } else if (!event.shiftKey && (document.activeElement === last || !activeModal.card.contains(document.activeElement))) {
     event.preventDefault();
     first.focus();
+  }
+});
+
+/* Atalhos de teclado da janela principal (cofre aberto). */
+const SHORTCUTS = [
+  ['Ctrl+F', 'Buscar'],
+  ['Ctrl+N', 'Nova conta'],
+  ['Ctrl+Shift+C', 'Copiar a senha da conta aberta'],
+  ['Ctrl+L', 'Bloquear o cofre'],
+];
+
+function focusSearch() {
+  if (state.view !== 'vault') setView('vault');
+  setScreen('list');
+  ui.search?.focus();
+  ui.search?.select();
+}
+
+document.addEventListener('keydown', (event) => {
+  if (quickMode || !state.unlocked || !ui.shell || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+  const key = event.key.toLowerCase();
+  if (key === 'l' && !event.shiftKey) {
+    event.preventDefault();
+    lockNow('Cofre bloqueado.');
+    return;
+  }
+  if (activeModal) return;
+  if (key === 'f' && !event.shiftKey) {
+    event.preventDefault();
+    focusSearch();
+  } else if (key === 'n' && !event.shiftKey) {
+    event.preventDefault();
+    if (state.view !== 'vault') setView('vault');
+    openEntryForm(null);
+  } else if (key === 'c' && event.shiftKey) {
+    event.preventDefault();
+    if (state.view === 'vault' && state.selected) copyField(state.selected, 'password');
+    else toast('Abra uma conta para copiar a senha', 'warn');
   }
 });
 
@@ -2464,9 +2503,27 @@ function buildSettings() {
           h('span', { class: 'row-k grow', text: 'Biblioteca de links' }),
           h('span', { class: 'cat-row-count', text: String(state.services.length) }),
           h('span', { class: 'chev', 'aria-hidden': 'true' }, icon('chevron', 16, 2.4))))),
+    h('div', { class: 'settings-stack ow-in' },
+      h('h2', { class: 'group-title', text: 'Importar e exportar' }),
+      h('div', { class: 'group' },
+        h('button', { class: 'btn group-row cat-row', id: 'settings-import', type: 'button', onClick: startImport },
+          h('span', { class: 'cat-tile violet', 'aria-hidden': 'true' }, icon('download', 18)),
+          h('span', { class: 'row-k grow', text: 'Importar de outro gerenciador' }),
+          h('span', { class: 'chev', 'aria-hidden': 'true' }, icon('chevron', 16, 2.4))),
+        h('button', { class: 'btn group-row cat-row', id: 'settings-export', type: 'button', onClick: openExportSheet },
+          h('span', { class: 'cat-tile amber', 'aria-hidden': 'true' }, icon('upload', 18)),
+          h('span', { class: 'row-k grow', text: 'Exportar cofre (CSV)' }),
+          h('span', { class: 'chev', 'aria-hidden': 'true' }, icon('chevron', 16, 2.4)))),
+      h('p', { class: 'hint', text: 'Importa o arquivo CSV exportado pelo Chrome, Edge, Gerenciador de Senhas do Google, Bitwarden, Firefox ou pelo próprio OwLock.' })),
     ui.protection,
     ui.backupsBox,
     ui.desktopBox,
+    h('div', { class: 'settings-stack ow-in' },
+      h('h2', { class: 'group-title', text: 'Atalhos de teclado' }),
+      h('div', { class: 'group', id: 'shortcuts' }, SHORTCUTS.map(([keys, label]) =>
+        h('div', { class: 'group-row' },
+          h('span', { class: 'row-k grow', text: label }),
+          h('kbd', { class: 'kbd', text: keys }))))),
     h('div', { class: 'settings-stack ow-in' },
       h('h2', { class: 'group-title', text: 'Chave Secreta e Kit de emergência' }),
       h('div', { class: 'group' },
@@ -2488,6 +2545,143 @@ function buildSettings() {
   current.input.focus();
   loadBackups();
   loadDesktop();
+}
+
+/* ======================================================================
+   Importar e exportar (Ajustes > Importar e exportar)
+   ====================================================================== */
+
+async function startImport() {
+  const button = document.getElementById('settings-import');
+  if (button) button.disabled = true;
+  const r = await call('import_pick');
+  if (button) button.disabled = false;
+  if (!r.ok) {
+    if (r.error !== 'cancelled' && r.error !== 'locked') toast(apiMessage(r, 'Não foi possível ler o arquivo.'), 'warn');
+    return;
+  }
+  showImportPreview(r);
+}
+
+function showImportPreview(preview) {
+  let confirmed = false;
+  const error = h('p', { class: 'msg error', id: 'import-error', role: 'alert' });
+  const submit = h('button', { class: 'btn btn-primary', id: 'import-submit', type: 'submit' });
+  const dupBox = h('input', { class: 'ios-switch', type: 'checkbox', role: 'switch', id: 'import-dups' });
+  const delBox = h('input', { class: 'ios-switch', type: 'checkbox', role: 'switch', id: 'import-delete', checked: true });
+  const count = () => preview.new + (dupBox.checked ? preview.duplicates : 0);
+  const paint = () => {
+    const n = count();
+    submit.disabled = n === 0;
+    submit.textContent = n ? `Importar ${n} ${plural(n, 'conta', 'contas')}` : 'Nada para importar';
+  };
+  dupBox.addEventListener('change', paint);
+  paint();
+
+  const facts = [
+    `${preview.new} ${plural(preview.new, 'conta nova', 'contas novas')}`,
+    preview.duplicates ? `${preview.duplicates} já ${plural(preview.duplicates, 'existe', 'existem')} no cofre` : '',
+    preview.skipped ? `${preview.skipped} ${plural(preview.skipped, 'linha ignorada', 'linhas ignoradas')}` : '',
+  ].filter(Boolean).join(' · ');
+  const shown = (preview.items || []).slice(0, 50);
+  const list = h('div', { class: 'import-list', id: 'import-list' }, shown.map((item) =>
+    h('div', { class: `import-row${item.duplicate ? ' is-dup' : ''}` },
+      h('span', { class: 'import-text' },
+        h('span', { class: 'import-service', text: item.service }),
+        h('span', { class: 'import-meta', text: [item.username, item.host].filter(Boolean).join(' · ') || 'Sem login' })),
+      item.duplicate ? h('span', { class: 'badge-pill', text: 'Já existe' }) : null)));
+  const more = preview.total > shown.length
+    ? h('p', { class: 'hint', text: `E mais ${preview.total - shown.length} ${plural(preview.total - shown.length, 'conta', 'contas')}.` })
+    : null;
+  const cats = preview.new_categories?.length
+    ? h('p', { class: 'hint', id: 'import-cats', text: `Categorias novas: ${preview.new_categories.join(', ')}.` })
+    : null;
+
+  const form = h('form', { novalidate: '' },
+    h('p', { class: 'lead' }, 'Arquivo ', h('strong', { text: preview.file_name }), ` (${preview.source_label}).`),
+    h('p', { class: 'notice', id: 'import-summary', text: facts || 'Nenhuma conta encontrada no arquivo.' }),
+    list, more, cats,
+    h('div', { class: 'group' },
+      preview.duplicates ? h('label', { class: 'group-row switch-row', for: 'import-dups' }, h('span', { class: 'row-k grow', text: 'Importar também as que já existem' }), dupBox) : null,
+      h('label', { class: 'group-row switch-row', for: 'import-delete' }, h('span', { class: 'row-k grow', text: 'Apagar o arquivo CSV depois de importar' }), delBox)),
+    h('p', { class: 'notice warn', text: 'O arquivo CSV guarda as senhas sem proteção. Depois de importar, não deixe uma cópia dele no computador.' }),
+    error,
+    h('div', { class: 'modal-actions' },
+      h('button', { class: 'btn btn-ghost', id: 'import-cancel', type: 'button', onClick: closeModal }, 'Cancelar'),
+      submit));
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (submit.disabled) return;
+    error.textContent = '';
+    submit.disabled = true;
+    submit.textContent = 'Importando...';
+    const r = await call('import_confirm', preview.token, dupBox.checked, delBox.checked);
+    if (!r.ok) {
+      paint();
+      if (r.error !== 'locked') error.textContent = apiMessage(r, 'Não foi possível importar.');
+      return;
+    }
+    confirmed = true;
+    closeModal();
+    await Promise.all([loadCategories(), loadServices()]);
+    await loadEntries();
+    renderList();
+    renderDetail();
+    if (ui.paneSettings?.isConnected && state.view === 'settings') buildSettings();
+    const n = r.imported || 0;
+    let message = `${n} ${plural(n, 'conta importada', 'contas importadas')}`;
+    if (delBox.checked && !r.deleted_file) message += '. Apague o arquivo CSV manualmente.';
+    toast(message, delBox.checked && !r.deleted_file ? 'warn' : 'ok');
+  });
+  const card = h('div', { class: 'modal', 'aria-labelledby': 'import-title' },
+    h('div', { class: 'modal-head' },
+      h('h2', { id: 'import-title', text: 'Importar contas' }),
+      h('button', { class: 'btn btn-icon', type: 'button', 'aria-label': 'Fechar', onClick: closeModal }, icon('close', 18))),
+    form);
+  openModal(card, { onClose: () => { if (!confirmed) call('import_cancel'); } });
+}
+
+function openExportSheet() {
+  const pw = passwordField({ id: 'export-password', label: 'Senha mestra', autofocus: true });
+  const error = h('p', { class: 'msg error', id: 'export-error', role: 'alert' });
+  const submit = h('button', { class: 'btn btn-primary', id: 'export-submit', type: 'submit' }, 'Exportar');
+  const form = h('form', { novalidate: '' },
+    h('p', { class: 'lead', text: 'Gera um arquivo CSV com todas as contas, que o OwLock e outros gerenciadores conseguem importar.' }),
+    h('p', { class: 'notice warn', id: 'export-warning', text: 'O arquivo terá as senhas sem nenhuma proteção. Guarde-o em lugar seguro e apague assim que não precisar mais dele.' }),
+    pw.el, error,
+    h('div', { class: 'modal-actions' },
+      h('button', { class: 'btn btn-ghost', id: 'export-cancel', type: 'button', onClick: closeModal }, 'Cancelar'),
+      submit));
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (submit.disabled) return;
+    error.textContent = '';
+    if (!pw.input.value) {
+      error.textContent = 'Digite a senha mestra para exportar.';
+      pw.input.focus();
+      return;
+    }
+    submit.disabled = true;
+    submit.textContent = 'Exportando...';
+    const r = await call('export_vault', pw.input.value);
+    submit.disabled = false;
+    submit.textContent = 'Exportar';
+    if (!r.ok) {
+      if (r.error === 'locked' || r.error === 'cancelled') return;
+      error.textContent = apiMessage(r, 'Não foi possível exportar.');
+      if (r.error === 'wrong_password') pw.input.focus();
+      return;
+    }
+    pw.input.value = '';
+    closeModal();
+    toast(`${r.count} ${plural(r.count, 'conta exportada', 'contas exportadas')}`);
+  });
+  const card = h('div', { class: 'modal narrow', 'aria-labelledby': 'export-title' },
+    h('div', { class: 'modal-head' },
+      h('h2', { id: 'export-title', text: 'Exportar cofre' }),
+      h('button', { class: 'btn btn-icon', type: 'button', 'aria-label': 'Fechar', onClick: closeModal }, icon('close', 18))),
+    form);
+  openModal(card);
 }
 
 /* ======================================================================
